@@ -2,8 +2,8 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Color32, ColorImage, Context, Grid as UiGrid, RichText, ScrollArea, Sense,
-    Stroke, TextureHandle, TextureOptions, Vec2,
+    self, Align, Color32, ColorImage, Context, Frame as UiFrame, Grid as UiGrid, Margin,
+    RichText, ScrollArea, Sense, Stroke, TextureHandle, TextureOptions, Vec2,
 };
 use qrstatic::codec::temporal::{
     TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, naive_field,
@@ -28,8 +28,8 @@ fn main() -> eframe::Result<()> {
     let app = DebugViewerApp::new(args).map_err(eframe_error)?;
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([980.0, 760.0])
-            .with_min_inner_size([820.0, 620.0])
+            .with_inner_size([900.0, 640.0])
+            .with_min_inner_size([780.0, 520.0])
             .with_title("qrstatic debug viewer"),
         ..Default::default()
     };
@@ -446,7 +446,7 @@ impl eframe::App for DebugViewerApp {
             ui.vertical(|ui| {
                 let available = ui.available_size();
                 let stats_width = 260.0;
-                let top_height = (available.y * 0.63).max(320.0);
+                let top_height = (available.y * 0.50).max(240.0);
 
                 ui.horizontal_top(|ui| {
                     let video_size = Vec2::new((available.x - stats_width - 12.0).max(320.0), top_height);
@@ -457,7 +457,7 @@ impl eframe::App for DebugViewerApp {
                         &self.stats,
                         self.config.n_frames,
                     );
-                    ui.add_space(12.0);
+                    ui.add_space(8.0);
                     ui.vertical(|ui| {
                         ui.set_width(stats_width);
                         draw_stats(
@@ -470,22 +470,24 @@ impl eframe::App for DebugViewerApp {
                     });
                 });
 
-                ui.add_space(12.0);
-                draw_layer1_track(
-                    ui,
-                    &self.layer1_windows,
-                    self.active_window_texture.as_ref(),
-                    self.current_window_number(),
-                    self.frame_index,
-                    self.config.n_frames,
-                    self.stats.decoded_message.as_deref(),
-                );
-                ui.add_space(12.0);
-                draw_layer2_track(
-                    ui,
-                    &self.layer2_samples,
-                    self.config.n_frames,
-                );
+                ui.add_space(8.0);
+                ScrollArea::vertical().id_salt("bottom-tracks").show(ui, |ui| {
+                    draw_layer1_track(
+                        ui,
+                        &self.layer1_windows,
+                        self.active_window_texture.as_ref(),
+                        self.current_window_number(),
+                        self.frame_index,
+                        self.config.n_frames,
+                        self.stats.decoded_message.as_deref(),
+                    );
+                    ui.add_space(8.0);
+                    draw_layer2_track(
+                        ui,
+                        &self.layer2_samples,
+                        self.config.n_frames,
+                    );
+                });
             });
         });
     }
@@ -498,24 +500,25 @@ fn draw_video_panel(
     stats: &StatsSnapshot,
     total_frames: usize,
 ) {
-    ui.vertical(|ui| {
+    panel_frame().show(ui, |ui| {
         ui.label(RichText::new("Live Frame").strong());
-        let desired = Vec2::new(pane_size.x, pane_size.y - 24.0);
+        let desired = Vec2::new(pane_size.x - 16.0, pane_size.y - 40.0);
         if let Some(texture) = texture {
             ui.add(egui::Image::new(texture).fit_to_exact_size(desired));
         } else {
             ui.allocate_space(desired);
         }
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         ui.label(
             RichText::new(format!(
-                "frame {}/{}   stream {}   window {}   detector {:.2}",
+                "frame {}/{}  stream {}  window {}  detector {:.2}",
                 stats.display_frame,
                 total_frames,
                 stats.stream_position,
                 stats.window_number,
                 stats.detector_score.unwrap_or(0.0)
             ))
+            .small()
             .color(Color32::LIGHT_GRAY),
         );
     });
@@ -530,31 +533,34 @@ fn draw_layer1_track(
     total_frames: usize,
     active_decode: Option<&str>,
 ) {
+    panel_frame().show(ui, |ui| {
     ui.label(RichText::new("Layer 1 Decode Track").strong());
     ScrollArea::horizontal().id_salt("layer1-track").show(ui, |ui| {
         ui.horizontal(|ui| {
             for thumb in completed_windows {
                 ui.vertical(|ui| {
+                    ui.set_max_width(60.0);
                     ui.label(RichText::new(format!("W{:02}", thumb.window_number)).small());
                     if let Some(texture) = &thumb.texture {
                         ui.add(
                             egui::Image::new(texture)
-                                .fit_to_exact_size(Vec2::splat(72.0))
+                                .fit_to_exact_size(Vec2::splat(56.0))
                                 .sense(Sense::hover()),
                         );
                     }
+                    let msg = thumb.decoded_message.as_deref().unwrap_or(&thumb.key);
+                    let label = truncate_label(msg, 12);
                     ui.label(
-                        RichText::new(
-                            thumb.decoded_message.as_deref().unwrap_or(&thumb.key),
-                        )
-                        .small()
-                        .color(Color32::LIGHT_GRAY),
+                        RichText::new(label)
+                            .small()
+                            .color(Color32::LIGHT_GRAY),
                     );
                 });
-                ui.add_space(6.0);
+                ui.add_space(4.0);
             }
 
             ui.vertical(|ui| {
+                ui.set_max_width(60.0);
                 ui.label(
                     RichText::new(format!("W{:02} {:>2}/{}", active_window_number, active_frame, total_frames))
                         .small(),
@@ -562,17 +568,19 @@ fn draw_layer1_track(
                 if let Some(texture) = active_texture {
                     ui.add(
                         egui::Image::new(texture)
-                            .fit_to_exact_size(Vec2::splat(72.0))
+                            .fit_to_exact_size(Vec2::splat(56.0))
                             .sense(Sense::hover()),
                     );
                 }
+                let label = truncate_label(active_decode.unwrap_or("active"), 12);
                 ui.label(
-                    RichText::new(active_decode.unwrap_or("active"))
+                    RichText::new(label)
                         .small()
                         .color(Color32::from_rgb(150, 210, 255)),
                 );
             });
         });
+    });
     });
 }
 
@@ -581,69 +589,63 @@ fn draw_layer2_track(
     samples: &[f32],
     n_frames: usize,
 ) {
-    ui.label(RichText::new("Layer 2 Data Track").strong());
-    let desired_size = Vec2::new(ui.available_width(), 140.0);
-    let (rect, _response) = ui.allocate_exact_size(desired_size, Sense::hover());
-    let painter = ui.painter_at(rect);
+    panel_frame().show(ui, |ui| {
+        ui.label(RichText::new("Layer 2 Data Track").strong());
+        let desired_size = Vec2::new(ui.available_width(), 100.0);
+        let (rect, _response) = ui.allocate_exact_size(desired_size, Sense::hover());
 
-    painter.rect_stroke(
-        rect,
-        6.0,
-        Stroke::new(1.0, Color32::from_gray(70)),
-        egui::StrokeKind::Inside,
-    );
+        if !samples.is_empty() {
+            let painter = ui.painter_at(rect);
+            let max_mag = samples
+                .iter()
+                .map(|value| value.abs())
+                .fold(1e-6, f32::max);
+            let mid_y = rect.center().y;
+            let to_screen = |index: usize, value: f32| {
+                let x = if n_frames <= 1 {
+                    rect.left()
+                } else {
+                    rect.left()
+                        + rect.width() * index as f32
+                            / (samples.len().saturating_sub(1).max(1)) as f32
+                };
+                let y = mid_y - (rect.height() * 0.45) * (value / max_mag).clamp(-1.0, 1.0);
+                egui::pos2(x, y)
+            };
 
-    if samples.is_empty() {
-        return;
-    }
+            painter.line_segment(
+                [egui::pos2(rect.left(), mid_y), egui::pos2(rect.right(), mid_y)],
+                Stroke::new(1.0, Color32::from_gray(50)),
+            );
 
-    let max_mag = samples
-        .iter()
-        .map(|value| value.abs())
-        .fold(1e-6, f32::max);
-    let mid_y = rect.center().y;
-    let to_screen = |index: usize, value: f32| {
-        let x = if n_frames <= 1 {
-            rect.left()
-        } else {
-            rect.left()
-                + rect.width() * index as f32 / (samples.len().saturating_sub(1).max(1)) as f32
-        };
-        let y = mid_y - (rect.height() * 0.45) * (value / max_mag).clamp(-1.0, 1.0);
-        egui::pos2(x, y)
-    };
+            let bar_width = (rect.width() / samples.len().max(1) as f32).max(2.0);
+            for (index, value) in samples.iter().enumerate() {
+                let x = rect.left() + rect.width() * index as f32 / samples.len().max(1) as f32;
+                let top = to_screen(index, *value).y;
+                let bar_rect = egui::Rect::from_min_max(
+                    egui::pos2(x, top.min(mid_y)),
+                    egui::pos2((x + bar_width).min(rect.right()), top.max(mid_y)),
+                );
+                let color = if *value >= 0.0 {
+                    Color32::from_rgb(120, 200, 255)
+                } else {
+                    Color32::from_rgb(255, 170, 120)
+                };
+                painter.rect_filled(bar_rect, 0.0, color);
+            }
+        }
 
-    painter.line_segment(
-        [egui::pos2(rect.left(), mid_y), egui::pos2(rect.right(), mid_y)],
-        Stroke::new(1.0, Color32::from_gray(90)),
-    );
-
-    let bar_width = (rect.width() / samples.len().max(1) as f32).max(2.0);
-    for (index, value) in samples.iter().enumerate() {
-        let x = rect.left() + rect.width() * index as f32 / samples.len().max(1) as f32;
-        let top = to_screen(index, *value).y;
-        let bar_rect = egui::Rect::from_min_max(
-            egui::pos2(x, top.min(mid_y)),
-            egui::pos2((x + bar_width).min(rect.right()), top.max(mid_y)),
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!(
+                "signed accumulation proxy  current {:.3}  samples {}",
+                samples.last().copied().unwrap_or(0.0),
+                samples.len()
+            ))
+            .small()
+            .color(Color32::LIGHT_GRAY),
         );
-        let color = if *value >= 0.0 {
-            Color32::from_rgb(120, 200, 255)
-        } else {
-            Color32::from_rgb(255, 170, 120)
-        };
-        painter.rect_filled(bar_rect, 0.0, color);
-    }
-
-    ui.add_space(4.0);
-    ui.label(
-        RichText::new(format!(
-            "placeholder signed accumulation proxy   current {:.3}   samples {}",
-            samples.last().copied().unwrap_or(0.0),
-            samples.len()
-        ))
-        .small()
-        .color(Color32::LIGHT_GRAY),
-    );
+    });
 }
 
 fn draw_stats(
@@ -653,6 +655,7 @@ fn draw_stats(
     is_playing: &mut bool,
     last_tick: &mut Instant,
 ) {
+    panel_frame().show(ui, |ui| {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Temporal Stats").strong());
         let label = if *is_playing { "Pause" } else { "Play" };
@@ -664,7 +667,7 @@ fn draw_stats(
 
     UiGrid::new("stats-grid")
         .num_columns(2)
-        .spacing([10.0, 2.0])
+        .spacing([8.0, 1.0])
         .show(ui, |ui| {
             stat_row(ui, "state", if *is_playing { "playing" } else { "paused" });
             stat_row(ui, "frame", &format!("{}/{}", stats.display_frame, config.n_frames));
@@ -709,13 +712,14 @@ fn draw_stats(
                 &format!("{:.2} / {:.2}", config.noise_amplitude, config.l1_amplitude),
             );
         });
+    });
 }
 
 fn stat_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.with_layout(egui::Layout::left_to_right(Align::Min), |ui| {
-        ui.label(RichText::new(label).color(Color32::LIGHT_GRAY));
+        ui.label(RichText::new(label).small().color(Color32::LIGHT_GRAY));
     });
-    ui.label(value);
+    ui.label(RichText::new(value).small().monospace());
     ui.end_row();
 }
 
@@ -891,6 +895,22 @@ fn build_stream_windows(encoder: &TemporalEncoder, args: &Args) -> Result<Vec<St
         });
     }
     Ok(windows)
+}
+
+fn panel_frame() -> UiFrame {
+    UiFrame::NONE
+        .fill(Color32::from_gray(30))
+        .stroke(Stroke::new(1.0, Color32::from_gray(50)))
+        .corner_radius(6.0)
+        .inner_margin(Margin::same(8))
+}
+
+fn truncate_label(text: &str, max_chars: usize) -> String {
+    if text.len() <= max_chars {
+        text.to_string()
+    } else {
+        format!("{}...", &text[..max_chars])
+    }
 }
 
 fn map_symmetric_to_u8(value: f32, amplitude: f32) -> u8 {
