@@ -403,6 +403,11 @@ pub fn version_for_size(size: usize) -> Option<&'static VersionInfo> {
     VERSIONS.iter().find(|v| v.size == size)
 }
 
+/// Get the version info for a QR version number (1-6).
+pub fn version_for_number(version: u8) -> Option<&'static VersionInfo> {
+    VERSIONS.iter().find(|v| v.version == version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

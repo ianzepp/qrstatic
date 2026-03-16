@@ -133,10 +133,7 @@ impl TemporalEncoder {
             build_temporal_schedule(master_key, self.config.frame_shape, self.config.n_frames);
         let mut frames = Vec::with_capacity(self.config.n_frames);
 
-        for (frame_index, frame_schedule) in schedule
-            .iter()
-            .enumerate()
-            .take(self.config.n_frames)
+        for (frame_index, frame_schedule) in schedule.iter().enumerate().take(self.config.n_frames)
         {
             let mut frame = noise_frame(
                 master_key,
@@ -199,7 +196,9 @@ impl TemporalEncoder {
             );
             let permutation = frame_permutation(master_key, frame_index, self.config.frame_shape);
 
-            for (logical_idx, &physical_idx) in permutation.iter().enumerate().take(signal_map.len()) {
+            for (logical_idx, &physical_idx) in
+                permutation.iter().enumerate().take(signal_map.len())
+            {
                 let l1 = self.config.l1_amplitude
                     * signal_map.data()[logical_idx]
                     * l1_schedule[frame_index].data()[logical_idx];

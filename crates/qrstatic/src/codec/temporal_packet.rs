@@ -462,7 +462,7 @@ fn padded_packet_payload(
     Ok(padded)
 }
 
-fn systematic_generator_rows(profile: TemporalPacketProfile) -> Result<Vec<Vec<u8>>> {
+pub(crate) fn systematic_generator_rows(profile: TemporalPacketProfile) -> Result<Vec<Vec<u8>>> {
     let total_shards = profile.total_shards();
     let mut vandermonde = Vec::with_capacity(total_shards);
     for row_index in 0..total_shards {
@@ -495,7 +495,7 @@ fn multiply_row_by_matrix(row: &[u8], matrix: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-fn invert_matrix(matrix: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
+pub(crate) fn invert_matrix(matrix: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
     let n = matrix.len();
     if n == 0 || matrix.iter().any(|row| row.len() != n) {
         return Err(Error::Codec(
