@@ -31,7 +31,9 @@ pub use codec::signed::SignedDecodeResult;
 /// Common sliding codec decode output.
 pub use codec::sliding::SlidingDecodeResult;
 /// Common temporal codec decode output.
-pub use codec::temporal::TemporalDecodeResult;
+pub use codec::temporal::{TemporalDecodeResult, TemporalLayer2Config, TemporalLayer2DecodeResult};
+/// Common temporal packet-layer types.
+pub use codec::temporal_packet::{TemporalPacket, TemporalPacketProfile};
 /// Shared codec carrier and result types.
 pub use codec::{DecodeResult, EncodeConfig, Frame};
 /// Error and result aliases used across the crate.

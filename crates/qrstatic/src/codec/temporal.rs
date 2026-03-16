@@ -1,6 +1,10 @@
 use crate::codec::common::{extract_qr_from_sign_grid, validate_matching_frames};
+use crate::codec::temporal_packet::{
+    TemporalPacket, TemporalPacketProfile, decode_packet_stream, encode_packet_stream, packet_stream_layout,
+    recover_payload,
+};
 use crate::error::{Error, Result};
-use crate::{Grid, Prng, qr};
+use crate::{Grid, Prng, bits, qr};
 
 /// Shared configuration for the fixed-window Layer 1 temporal codec.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +65,42 @@ pub struct TemporalDecodeResult {
     pub message: Option<String>,
 }
 
+/// Layer 2 payload settings carried under the fixed-window temporal carrier.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemporalLayer2Config {
+    pub amplitude: f32,
+    pub payload_len: usize,
+    pub packet_profile: TemporalPacketProfile,
+}
+
+impl TemporalLayer2Config {
+    pub fn new(
+        amplitude: f32,
+        payload_len: usize,
+        packet_profile: TemporalPacketProfile,
+    ) -> Result<Self> {
+        if amplitude <= 0.0 {
+            return Err(Error::Codec(
+                "temporal Layer 2 requires amplitude > 0".into(),
+            ));
+        }
+        Ok(Self {
+            amplitude,
+            payload_len,
+            packet_profile,
+        })
+    }
+}
+
+/// Fixed-window Layer 2 decode output for the temporal codec.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemporalLayer2DecodeResult {
+    pub layer1: TemporalDecodeResult,
+    pub residual_field: Grid<f32>,
+    pub packets: Vec<TemporalPacket>,
+    pub payload: Vec<u8>,
+}
+
 /// Fixed-window Layer 1 temporal encoder.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemporalEncoder {
@@ -111,6 +151,56 @@ impl TemporalEncoder {
             {
                 let physical_idx = permutation[logical_idx];
                 frame.data_mut()[physical_idx] += self.config.l1_amplitude * signal * chip;
+            }
+
+            frames.push(frame);
+        }
+
+        Ok(frames)
+    }
+
+    pub fn encode_message_with_payload(
+        &self,
+        master_key: &str,
+        qr_payload: &str,
+        payload: &[u8],
+        layer2: &TemporalLayer2Config,
+    ) -> Result<Vec<Grid<f32>>> {
+        if payload.len() != layer2.payload_len {
+            return Err(Error::Codec(format!(
+                "temporal Layer 2 payload length mismatch: expected {}, got {}",
+                layer2.payload_len,
+                payload.len()
+            )));
+        }
+
+        let qr_grid = qr::encode::encode(qr_payload)?;
+        let signal_map = build_l1_signal_map(&qr_grid, self.config.frame_shape)?;
+        let l1_schedule = build_temporal_schedule(master_key, self.config.frame_shape, self.config.n_frames);
+        let l2_signal_map = build_l2_signal_map(payload, layer2, self.config.frame_shape)?;
+        let l2_schedule =
+            build_temporal_schedule_domain(master_key, self.config.frame_shape, self.config.n_frames, "l2");
+        let mut frames = Vec::with_capacity(self.config.n_frames);
+
+        for frame_index in 0..self.config.n_frames {
+            let mut frame = noise_frame(
+                master_key,
+                frame_index,
+                self.config.frame_shape,
+                self.config.noise_amplitude,
+            );
+            let permutation =
+                frame_permutation(master_key, frame_index, self.config.frame_shape);
+
+            for logical_idx in 0..signal_map.len() {
+                let physical_idx = permutation[logical_idx];
+                let l1 = self.config.l1_amplitude
+                    * signal_map.data()[logical_idx]
+                    * l1_schedule[frame_index].data()[logical_idx];
+                let l2 = layer2.amplitude
+                    * l2_signal_map.data()[logical_idx]
+                    * l2_schedule[frame_index].data()[logical_idx];
+                frame.data_mut()[physical_idx] += l1 + l2;
             }
 
             frames.push(frame);
@@ -208,6 +298,33 @@ impl TemporalDecoder {
             detector_score,
             qr,
             message,
+        })
+    }
+
+    pub fn decode_payload(
+        &self,
+        frames: &[Grid<f32>],
+        temporal_key: &str,
+        policy: &TemporalDecodePolicy,
+        layer2: &TemporalLayer2Config,
+    ) -> Result<TemporalLayer2DecodeResult> {
+        let layer1 = self.decode_qr(frames, temporal_key, policy)?;
+        let residual_field = correlate_layer2_residual(
+            frames,
+            temporal_key,
+            &self.config,
+            &layer1.qr,
+            layer2,
+        )?;
+        let packet_stream = decode_l2_packet_stream(&residual_field, layer2, self.config.frame_shape)?;
+        let packets = decode_packet_stream(&packet_stream, layer2.payload_len, layer2.packet_profile)?;
+        let payload = recover_payload(&packets)?;
+
+        Ok(TemporalLayer2DecodeResult {
+            layer1,
+            residual_field,
+            packets,
+            payload,
         })
     }
 }
@@ -314,6 +431,15 @@ fn build_temporal_schedule(
     frame_shape: (usize, usize),
     n_frames: usize,
 ) -> Vec<Grid<f32>> {
+    build_temporal_schedule_domain(master_key, frame_shape, n_frames, "l1")
+}
+
+fn build_temporal_schedule_domain(
+    master_key: &str,
+    frame_shape: (usize, usize),
+    n_frames: usize,
+    domain: &str,
+) -> Vec<Grid<f32>> {
     let n_cells = frame_shape.0 * frame_shape.1;
     let mut schedule =
         vec![Grid::filled(frame_shape.0, frame_shape.1, 0.0f32); n_frames];
@@ -322,7 +448,7 @@ fn build_temporal_schedule(
         let mut chips = vec![1.0f32; n_frames / 2];
         chips.extend(vec![-1.0f32; n_frames / 2]);
         let mut rng = Prng::from_str_seed(&format!(
-            "qrstatic:temporal:v1:l1:{master_key}:cell:{cell_idx}"
+            "qrstatic:temporal:v1:{domain}:{master_key}:cell:{cell_idx}"
         ));
         for idx in (1..chips.len()).rev() {
             let swap_idx = (rng.next_u64() as usize) % (idx + 1);
@@ -335,6 +461,102 @@ fn build_temporal_schedule(
     }
 
     schedule
+}
+
+fn build_l2_signal_map(
+    payload: &[u8],
+    layer2: &TemporalLayer2Config,
+    frame_shape: (usize, usize),
+) -> Result<Grid<f32>> {
+    if layer2.payload_len == 0 {
+        return Ok(Grid::filled(frame_shape.0, frame_shape.1, 0.0f32));
+    }
+
+    let packet_stream = encode_packet_stream(payload, layer2.packet_profile)?;
+    let bits = bits::bytes_to_bits(&packet_stream);
+    let n_cells = frame_shape.0 * frame_shape.1;
+    if bits.len() > n_cells {
+        return Err(Error::Codec(format!(
+            "temporal Layer 2 needs {} cells for packet stream bits, but frame only has {} cells",
+            bits.len(),
+            n_cells
+        )));
+    }
+
+    let mut data = vec![0.0f32; n_cells];
+    for (cell_index, cell) in data.iter_mut().enumerate() {
+        let bit = bits[cell_index % bits.len()];
+        *cell = if bit == 1 { 1.0 } else { -1.0 };
+    }
+    Ok(Grid::from_vec(data, frame_shape.0, frame_shape.1))
+}
+
+fn correlate_layer2_residual(
+    frames: &[Grid<f32>],
+    temporal_key: &str,
+    config: &TemporalConfig,
+    qr: &Grid<u8>,
+    layer2: &TemporalLayer2Config,
+) -> Result<Grid<f32>> {
+    validate_temporal_frames(frames, config)?;
+    let l1_signal_map = build_l1_signal_map(qr, config.frame_shape)?;
+    let l1_schedule = build_temporal_schedule(temporal_key, config.frame_shape, config.n_frames);
+    let l2_schedule =
+        build_temporal_schedule_domain(temporal_key, config.frame_shape, config.n_frames, "l2");
+    let mut data = vec![0.0; config.frame_shape.0 * config.frame_shape.1];
+
+    for frame_index in 0..frames.len() {
+        let permutation = frame_permutation(temporal_key, frame_index, config.frame_shape);
+        let logical_frame = unpermute_grid(&frames[frame_index], &permutation);
+
+        for logical_idx in 0..logical_frame.len() {
+            let l1 = config.l1_amplitude
+                * l1_signal_map.data()[logical_idx]
+                * l1_schedule[frame_index].data()[logical_idx];
+            let residual = logical_frame.data()[logical_idx] - l1;
+            data[logical_idx] += residual * l2_schedule[frame_index].data()[logical_idx];
+        }
+    }
+
+    // Keep the residual field on the same scale as the matched-filter field.
+    for value in &mut data {
+        *value /= layer2.amplitude.max(1e-6);
+    }
+    Ok(Grid::from_vec(data, config.frame_shape.0, config.frame_shape.1))
+}
+
+fn decode_l2_packet_stream(
+    residual_field: &Grid<f32>,
+    layer2: &TemporalLayer2Config,
+    frame_shape: (usize, usize),
+) -> Result<Vec<u8>> {
+    if layer2.payload_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    let layout = packet_stream_layout(layer2.payload_len, layer2.packet_profile)?;
+    let stream_len: usize = layout.iter().sum();
+    let n_bits = stream_len * 8;
+    let n_cells = frame_shape.0 * frame_shape.1;
+    if n_bits > n_cells {
+        return Err(Error::Codec(format!(
+            "temporal Layer 2 decode needs {} cells for packet stream bits, but frame only has {} cells",
+            n_bits,
+            n_cells
+        )));
+    }
+
+    let mapping = bits::spread_bits(n_cells, n_bits);
+    let mut votes = vec![Vec::new(); n_bits];
+    for (bit_index, cells) in mapping.iter().enumerate() {
+        for &cell_index in cells {
+            votes[bit_index].push(residual_field.data()[cell_index]);
+        }
+    }
+    let decoded_bits = bits::majority_vote_f32(&votes);
+    let mut decoded_bytes = bits::bits_to_bytes(&decoded_bits);
+    decoded_bytes.truncate(stream_len);
+    Ok(decoded_bytes)
 }
 
 fn frame_permutation(master_key: &str, frame_index: usize, frame_shape: (usize, usize)) -> Vec<usize> {

@@ -13,6 +13,7 @@ pub mod layered;
 pub mod signed;
 pub mod sliding;
 pub mod temporal;
+pub mod temporal_packet;
 pub mod xor;
 
 /// A carrier frame for one of the supported codec families.

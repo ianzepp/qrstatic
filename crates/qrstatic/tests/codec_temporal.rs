@@ -1,7 +1,8 @@
 use qrstatic::codec::temporal::{
     TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, detector_score,
-    naive_field, try_extract_qr,
+    naive_field, try_extract_qr, TemporalLayer2Config,
 };
+use qrstatic::codec::temporal_packet::TemporalPacketProfile;
 use qrstatic::qr;
 
 fn test_config() -> TemporalConfig {
@@ -126,4 +127,29 @@ fn single_frame_does_not_reveal_centered_qr_layout() {
     }
 
     assert!(agreement < total * 7 / 10, "single-frame centered agreement too high: {agreement}/{total}");
+}
+
+#[test]
+fn temporal_layer2_packet_payload_roundtrip() {
+    let config = TemporalConfig::new((41, 41), 64, 0.42, 0.22).unwrap();
+    let layer2 = TemporalLayer2Config::new(
+        0.08,
+        12,
+        TemporalPacketProfile::new(2, 1, 8).unwrap(),
+    )
+    .unwrap();
+    let encoder = TemporalEncoder::new(config.clone()).unwrap();
+    let decoder = TemporalDecoder::new(config).unwrap();
+    let policy = TemporalDecodePolicy::fixed_threshold(6.0).unwrap();
+    let payload = b"layer2 hello";
+
+    let frames = encoder
+        .encode_message_with_payload("temporal-master", "temporal-visible", payload, &layer2)
+        .unwrap();
+    let decoded = decoder
+        .decode_payload(&frames, "temporal-master", &policy, &layer2)
+        .unwrap();
+
+    assert_eq!(decoded.layer1.message.as_deref(), Some("temporal-visible"));
+    assert_eq!(decoded.payload, payload);
 }

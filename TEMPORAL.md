@@ -10,7 +10,7 @@ Current repository status:
 
 - `temporal` Stage 1 Layer 1 exists in code
 - it is still a fixed-window bootstrap implementation, not the full production stack
-- packet/FEC Layer 2 is not implemented yet
+- a first Stage 2 packet/FEC slice exists in code, but it is still a narrow prototype rather than the final production design
 - the debug viewer and eval tooling now target `temporal`, not the old reference codecs
 
 All existing codecs in this repository should be treated as experimental or reference designs:
@@ -164,13 +164,35 @@ The current implemented Stage 1 in the repository does the following:
 
 What it does not do yet:
 
-- Layer 2 payload packets
-- packet FEC
+- final Layer 2 bootstrap metadata inside Layer 1
 - blind synchronization or sliding acquisition
 - threshold calibration from large empirical sweeps
 - richer detector statistics than the current scalar score
 
 This matters because the design is no longer only a proposal. Stage 1 behavior should now be described in terms that match the implemented contract.
+
+## Current Stage 2 Prototype
+
+The repository now contains a first end-to-end Stage 2 vertical slice.
+
+Implemented now:
+
+- fixed packet framing for bounded Layer 2 packets
+- per-packet CRC32 integrity
+- bounded GF(256) Reed-Solomon-style parity groups
+- packet erasure recovery from mixed data/parity shards
+- a fixed-window Layer 2 embedding path under the temporal carrier
+- Layer 1 reconstruction and subtraction before Layer 2 recovery
+- end-to-end recovery of a bounded opaque payload through the temporal codec
+
+What this prototype is not yet:
+
+- a finalized production packet profile
+- a complete bootstrap path, because the Layer 2 profile is still supplied out-of-band rather than carried by Layer 1 metadata
+- a full streaming or synchronization-aware Layer 2 design
+- a proof that the current Layer 2 symbol mapping is the final production mapping
+
+This Stage 2 slice should therefore be treated as implementation proof, not final architecture.
 
 ## Layer 1
 
@@ -632,6 +654,7 @@ Current Stage 1 acquisition target for the working baseline:
 
 - after Layer 1 subtraction, packet recovery should succeed at the target profile
 - packet integrity and FEC behavior should match design expectations
+- the packet/FEC profile should eventually be bootstrapped from Layer 1 rather than configured out-of-band
 
 ### Structured Payload Behavior
 
@@ -676,13 +699,13 @@ Implemented now:
 - CLI eval runner for repeated wrong-key / wrong-window / naive-path measurements
 - CLI prefix-acquisition instrumentation via `--prefix-step`
 - a tuned working baseline profile, `middle-64-a`, for later-emerging Layer 1 reveal
+- a first fixed-window Stage 2 payload prototype built on bounded packets and packet-block parity
 
 Not implemented yet:
 
-- packet layer
-- Layer 2 embedding
-- residual subtraction and Layer 2 decode
 - synchronization search beyond fixed known windows
+- Layer 1 bootstrap of the Stage 2 packet profile
+- a finalized production Layer 2 symbol mapping and confidence model
 
 Current working baseline:
 
@@ -707,6 +730,13 @@ Build:
 - integrity checks
 - Reed-Solomon packet-block FEC
 - opaque payload mode
+
+Current status:
+
+- implemented as a first prototype
+- exposed through a packet layer plus fixed-window Layer 2 encode/decode path
+- still missing bootstrap integration through Layer 1 metadata
+- still subject to redesign if later evals show the current Layer 2 mapping is too fragile or too visible
 
 ### Stage 3: Framed Payloads
 
