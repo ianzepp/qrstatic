@@ -2,8 +2,8 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Color32, ColorImage, Context, Grid as UiGrid, RichText, TextureHandle,
-    TextureOptions, Vec2,
+    self, Align, Color32, ColorImage, Context, Grid as UiGrid, RichText, ScrollArea, Sense,
+    Stroke, TextureHandle, TextureOptions, Vec2,
 };
 use qrstatic::codec::temporal::{
     TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, naive_field,
@@ -19,14 +19,17 @@ const DEFAULT_L1_AMPLITUDE: f32 = 0.22;
 const DEFAULT_FPS: f32 = 12.0;
 const DEFAULT_MASTER_KEY: &str = "qrstatic-debug";
 const DEFAULT_QR_PAYLOAD: &str = "temporal-bootstrap";
+const DEFAULT_STREAM_WINDOWS: usize = 24;
+const MAX_WINDOW_HISTORY: usize = 12;
+const MAX_LAYER2_SAMPLES: usize = 512;
 
 fn main() -> eframe::Result<()> {
     let args = Args::parse(env::args().skip(1)).map_err(eframe_error)?;
     let app = DebugViewerApp::new(args).map_err(eframe_error)?;
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([260.0, 320.0])
-            .with_min_inner_size([240.0, 280.0])
+            .with_inner_size([980.0, 760.0])
+            .with_min_inner_size([820.0, 620.0])
             .with_title("qrstatic debug viewer"),
         ..Default::default()
     };
@@ -60,6 +63,7 @@ struct Args {
     width: usize,
     height: usize,
     n_frames: usize,
+    stream_windows: usize,
     noise_amplitude: f32,
     l1_amplitude: f32,
     fps: f32,
@@ -73,6 +77,7 @@ impl Args {
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
             n_frames: DEFAULT_FRAMES,
+            stream_windows: DEFAULT_STREAM_WINDOWS,
             noise_amplitude: DEFAULT_NOISE_AMPLITUDE,
             l1_amplitude: DEFAULT_L1_AMPLITUDE,
             fps: DEFAULT_FPS,
@@ -90,6 +95,10 @@ impl Args {
                 }
                 "--frames" => {
                     parsed.n_frames = parse_usize(&next_value(&mut args, "--frames")?, "--frames")?
+                }
+                "--stream-windows" => {
+                    parsed.stream_windows =
+                        parse_usize(&next_value(&mut args, "--stream-windows")?, "--stream-windows")?
                 }
                 "--noise-amplitude" => {
                     parsed.noise_amplitude = parse_f32(
@@ -114,6 +123,9 @@ impl Args {
         }
         if parsed.fps <= 0.0 {
             return Err("--fps must be greater than zero".into());
+        }
+        if parsed.stream_windows == 0 {
+            return Err("--stream-windows must be greater than zero".into());
         }
 
         let qr_grid = qr::encode::encode(&parsed.qr_payload)
@@ -148,6 +160,7 @@ fn help_text() -> String {
         "    --width <cells>",
         "    --height <cells>",
         "    --frames <count>",
+        "    --stream-windows <count>",
         "    --noise-amplitude <float>",
         "    --l1-amplitude <float>",
         "    --fps <float>",
@@ -174,23 +187,38 @@ fn parse_f32(value: &str, flag: &str) -> Result<f32, String> {
 
 struct DebugViewerApp {
     config: ViewerConfig,
-    frames: Vec<Grid<f32>>,
+    stream_windows: Vec<StreamWindow>,
     naive_accumulator: Grid<f32>,
     correlation_field: Grid<f32>,
     frame_index: usize,
-    loop_count: usize,
+    current_window_index: usize,
+    stream_passes: usize,
     last_tick: Instant,
     tick_interval: Duration,
     is_playing: bool,
     stats: StatsSnapshot,
-    static_texture: Option<TextureHandle>,
-    correlation_texture: Option<TextureHandle>,
+    raw_texture: Option<TextureHandle>,
+    active_window_texture: Option<TextureHandle>,
+    layer1_windows: Vec<Layer1WindowThumb>,
+    layer2_samples: Vec<f32>,
+}
+
+struct StreamWindow {
+    key: String,
+    qr_payload: String,
+    frames: Vec<Grid<f32>>,
+}
+
+struct Layer1WindowThumb {
+    window_number: usize,
+    image: ColorImage,
+    key: String,
+    decoded_message: Option<String>,
+    texture: Option<TextureHandle>,
 }
 
 #[derive(Debug, Clone)]
 struct ViewerConfig {
-    temporal_key: String,
-    qr_payload: String,
     width: usize,
     height: usize,
     n_frames: usize,
@@ -202,13 +230,17 @@ struct ViewerConfig {
 #[derive(Debug, Clone)]
 struct StatsSnapshot {
     display_frame: usize,
-    loop_count: usize,
+    window_number: usize,
+    stream_position: usize,
     naive_min: f32,
     naive_max: f32,
     naive_mean_abs: f32,
     corr_min: f32,
     corr_max: f32,
     corr_mean_abs: f32,
+    corr_mean_signed: f32,
+    current_key: String,
+    current_qr_payload: String,
     decoded_message: Option<String>,
     naive_qr_visible: bool,
     detector_score: Option<f32>,
@@ -225,13 +257,10 @@ impl DebugViewerApp {
         .map_err(|err| format!("failed to construct temporal config: {err}"))?;
         let encoder =
             TemporalEncoder::new(config.clone()).map_err(|err| format!("failed to construct temporal encoder: {err}"))?;
-        let frames = encoder
-            .encode_message(&args.master_key, &args.qr_payload)
-            .map_err(|err| format!("failed to generate temporal debug frames: {err}"))?;
+        let stream_windows = build_stream_windows(&encoder, &args)
+            .map_err(|err| format!("failed to generate temporal debug stream: {err}"))?;
 
         let viewer_config = ViewerConfig {
-            temporal_key: args.master_key,
-            qr_payload: args.qr_payload,
             width: args.width,
             height: args.height,
             n_frames: args.n_frames,
@@ -242,41 +271,53 @@ impl DebugViewerApp {
 
         Ok(Self {
             config: viewer_config,
-            frames,
+            stream_windows,
             naive_accumulator: Grid::new(args.width, args.height),
             correlation_field: Grid::new(args.width, args.height),
             frame_index: 0,
-            loop_count: 0,
+            current_window_index: 0,
+            stream_passes: 0,
             last_tick: Instant::now(),
             tick_interval: Duration::from_secs_f32(1.0 / args.fps),
             is_playing: true,
             stats: StatsSnapshot {
                 display_frame: 0,
-                loop_count: 0,
+                window_number: 1,
+                stream_position: 0,
                 naive_min: 0.0,
                 naive_max: 0.0,
                 naive_mean_abs: 0.0,
                 corr_min: 0.0,
                 corr_max: 0.0,
                 corr_mean_abs: 0.0,
+                corr_mean_signed: 0.0,
+                current_key: String::new(),
+                current_qr_payload: String::new(),
                 decoded_message: None,
                 naive_qr_visible: false,
                 detector_score: None,
             },
-            static_texture: None,
-            correlation_texture: None,
+            raw_texture: None,
+            active_window_texture: None,
+            layer1_windows: Vec::new(),
+            layer2_samples: Vec::with_capacity(MAX_LAYER2_SAMPLES),
         })
     }
 
     fn advance(&mut self) {
-        if self.frame_index == self.frames.len() {
+        if self.frame_index == self.current_frames().len() {
+            self.finish_window();
             self.frame_index = 0;
-            self.loop_count += 1;
+            self.current_window_index += 1;
+            if self.current_window_index == self.stream_windows.len() {
+                self.current_window_index = 0;
+                self.stream_passes += 1;
+            }
             self.naive_accumulator = Grid::new(self.config.width, self.config.height);
             self.correlation_field = Grid::new(self.config.width, self.config.height);
         }
 
-        let frame = &self.frames[self.frame_index];
+        let frame = self.current_frames()[self.frame_index].clone();
         for (sum, &cell) in self
             .naive_accumulator
             .data_mut()
@@ -288,46 +329,96 @@ impl DebugViewerApp {
 
         self.frame_index += 1;
         self.correlation_field =
-            compute_correlation_prefix(&self.config, &self.frames[..self.frame_index]).unwrap_or_else(
-                |_| Grid::new(self.config.width, self.config.height),
-            );
+            compute_correlation_prefix(self.current_window(), &self.config, &self.current_frames()[..self.frame_index])
+                .unwrap_or_else(|_| Grid::new(self.config.width, self.config.height));
         self.stats = compute_stats(
+            self.current_window(),
             &self.config,
             &self.naive_accumulator,
             &self.correlation_field,
-            &self.frames[..self.frame_index],
+            &self.current_frames()[..self.frame_index],
             self.frame_index,
-            self.loop_count,
+            self.current_window_number(),
         );
+        self.layer2_samples.push(self.stats.corr_mean_signed);
+        if self.layer2_samples.len() > MAX_LAYER2_SAMPLES {
+            let overflow = self.layer2_samples.len() - MAX_LAYER2_SAMPLES;
+            self.layer2_samples.drain(..overflow);
+        }
     }
 
     fn current_frame(&self) -> &Grid<f32> {
-        let index = self.frame_index.saturating_sub(1).min(self.frames.len() - 1);
-        &self.frames[index]
+        let index = self.frame_index.saturating_sub(1).min(self.current_frames().len() - 1);
+        &self.current_frames()[index]
+    }
+
+    fn current_window(&self) -> &StreamWindow {
+        &self.stream_windows[self.current_window_index]
+    }
+
+    fn current_frames(&self) -> &[Grid<f32>] {
+        &self.current_window().frames
+    }
+
+    fn current_window_number(&self) -> usize {
+        self.stream_passes * self.stream_windows.len() + self.current_window_index + 1
     }
 
     fn update_textures(&mut self, ctx: &Context) {
-        let static_image = render_static_image(self.current_frame(), self.config.noise_amplitude);
-        let correlation_image = render_field_image(
+        let raw_image = render_static_image(self.current_frame(), self.config.noise_amplitude);
+        let active_window_image = render_field_image(
             &self.correlation_field,
             self.config.l1_amplitude * self.config.n_frames as f32,
         );
 
-        if let Some(texture) = &mut self.static_texture {
-            texture.set(static_image, TextureOptions::NEAREST);
+        if let Some(texture) = &mut self.raw_texture {
+            texture.set(raw_image, TextureOptions::NEAREST);
         } else {
-            self.static_texture =
-                Some(ctx.load_texture("static-frame", static_image, TextureOptions::NEAREST));
+            self.raw_texture =
+                Some(ctx.load_texture("raw-frame", raw_image, TextureOptions::NEAREST));
         }
 
-        if let Some(texture) = &mut self.correlation_texture {
-            texture.set(correlation_image, TextureOptions::NEAREST);
+        if let Some(texture) = &mut self.active_window_texture {
+            texture.set(active_window_image, TextureOptions::NEAREST);
         } else {
-            self.correlation_texture = Some(ctx.load_texture(
-                "correlation-frame",
-                correlation_image,
+            self.active_window_texture = Some(ctx.load_texture(
+                "active-layer1-window",
+                active_window_image,
                 TextureOptions::NEAREST,
             ));
+        }
+
+        for thumb in &mut self.layer1_windows {
+            if thumb.texture.is_none() {
+                thumb.texture = Some(ctx.load_texture(
+                    format!("layer1-window-{}", thumb.window_number),
+                    thumb.image.clone(),
+                    TextureOptions::NEAREST,
+                ));
+            }
+        }
+    }
+
+    fn finish_window(&mut self) {
+        if self.frame_index == 0 {
+            return;
+        }
+
+        let image = render_field_image(
+            &self.correlation_field,
+            self.config.l1_amplitude * self.config.n_frames as f32,
+        );
+        let window_number = self.current_window_number();
+        self.layer1_windows.push(Layer1WindowThumb {
+            window_number,
+            image,
+            key: self.current_window().key.clone(),
+            decoded_message: self.stats.decoded_message.clone(),
+            texture: None,
+        });
+        if self.layer1_windows.len() > MAX_WINDOW_HISTORY {
+            let overflow = self.layer1_windows.len() - MAX_WINDOW_HISTORY;
+            self.layer1_windows.drain(..overflow);
         }
     }
 }
@@ -340,33 +431,219 @@ impl eframe::App for DebugViewerApp {
 
         if self.is_playing {
             let now = Instant::now();
-            while now.duration_since(self.last_tick) >= self.tick_interval {
+            if now.duration_since(self.last_tick) >= self.tick_interval {
                 self.last_tick += self.tick_interval;
                 self.advance();
             }
+        } else {
+            self.last_tick = Instant::now();
         }
 
         self.update_textures(ctx);
         ctx.request_repaint_after(self.tick_interval);
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                let pane_size = Vec2::splat(ui.available_width().max(1.0));
+            ui.vertical(|ui| {
+                let available = ui.available_size();
+                let stats_width = 260.0;
+                let top_height = (available.y * 0.63).max(320.0);
 
-                if let Some(texture) = &self.static_texture {
-                    ui.add(egui::Image::new(texture).fit_to_exact_size(pane_size));
-                }
+                ui.horizontal_top(|ui| {
+                    let video_size = Vec2::new((available.x - stats_width - 12.0).max(320.0), top_height);
+                    draw_video_panel(
+                        ui,
+                        self.raw_texture.as_ref(),
+                        video_size,
+                        &self.stats,
+                        self.config.n_frames,
+                    );
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(stats_width);
+                        draw_stats(
+                            ui,
+                            &self.config,
+                            &self.stats,
+                            &mut self.is_playing,
+                            &mut self.last_tick,
+                        );
+                    });
+                });
 
-                ui.add_space(8.0);
-                draw_stats(ui, &self.config, &self.stats, &mut self.is_playing);
-                ui.add_space(8.0);
-
-                if let Some(texture) = &self.correlation_texture {
-                    ui.add(egui::Image::new(texture).fit_to_exact_size(pane_size));
-                }
+                ui.add_space(12.0);
+                draw_layer1_track(
+                    ui,
+                    &self.layer1_windows,
+                    self.active_window_texture.as_ref(),
+                    self.current_window_number(),
+                    self.frame_index,
+                    self.config.n_frames,
+                    self.stats.decoded_message.as_deref(),
+                );
+                ui.add_space(12.0);
+                draw_layer2_track(
+                    ui,
+                    &self.layer2_samples,
+                    self.config.n_frames,
+                );
             });
         });
     }
+}
+
+fn draw_video_panel(
+    ui: &mut egui::Ui,
+    texture: Option<&TextureHandle>,
+    pane_size: Vec2,
+    stats: &StatsSnapshot,
+    total_frames: usize,
+) {
+    ui.vertical(|ui| {
+        ui.label(RichText::new("Live Frame").strong());
+        let desired = Vec2::new(pane_size.x, pane_size.y - 24.0);
+        if let Some(texture) = texture {
+            ui.add(egui::Image::new(texture).fit_to_exact_size(desired));
+        } else {
+            ui.allocate_space(desired);
+        }
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!(
+                "frame {}/{}   stream {}   window {}   detector {:.2}",
+                stats.display_frame,
+                total_frames,
+                stats.stream_position,
+                stats.window_number,
+                stats.detector_score.unwrap_or(0.0)
+            ))
+            .color(Color32::LIGHT_GRAY),
+        );
+    });
+}
+
+fn draw_layer1_track(
+    ui: &mut egui::Ui,
+    completed_windows: &[Layer1WindowThumb],
+    active_texture: Option<&TextureHandle>,
+    active_window_number: usize,
+    active_frame: usize,
+    total_frames: usize,
+    active_decode: Option<&str>,
+) {
+    ui.label(RichText::new("Layer 1 Decode Track").strong());
+    ScrollArea::horizontal().id_salt("layer1-track").show(ui, |ui| {
+        ui.horizontal(|ui| {
+            for thumb in completed_windows {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(format!("W{:02}", thumb.window_number)).small());
+                    if let Some(texture) = &thumb.texture {
+                        ui.add(
+                            egui::Image::new(texture)
+                                .fit_to_exact_size(Vec2::splat(72.0))
+                                .sense(Sense::hover()),
+                        );
+                    }
+                    ui.label(
+                        RichText::new(
+                            thumb.decoded_message.as_deref().unwrap_or(&thumb.key),
+                        )
+                        .small()
+                        .color(Color32::LIGHT_GRAY),
+                    );
+                });
+                ui.add_space(6.0);
+            }
+
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new(format!("W{:02} {:>2}/{}", active_window_number, active_frame, total_frames))
+                        .small(),
+                );
+                if let Some(texture) = active_texture {
+                    ui.add(
+                        egui::Image::new(texture)
+                            .fit_to_exact_size(Vec2::splat(72.0))
+                            .sense(Sense::hover()),
+                    );
+                }
+                ui.label(
+                    RichText::new(active_decode.unwrap_or("active"))
+                        .small()
+                        .color(Color32::from_rgb(150, 210, 255)),
+                );
+            });
+        });
+    });
+}
+
+fn draw_layer2_track(
+    ui: &mut egui::Ui,
+    samples: &[f32],
+    n_frames: usize,
+) {
+    ui.label(RichText::new("Layer 2 Data Track").strong());
+    let desired_size = Vec2::new(ui.available_width(), 140.0);
+    let (rect, _response) = ui.allocate_exact_size(desired_size, Sense::hover());
+    let painter = ui.painter_at(rect);
+
+    painter.rect_stroke(
+        rect,
+        6.0,
+        Stroke::new(1.0, Color32::from_gray(70)),
+        egui::StrokeKind::Inside,
+    );
+
+    if samples.is_empty() {
+        return;
+    }
+
+    let max_mag = samples
+        .iter()
+        .map(|value| value.abs())
+        .fold(1e-6, f32::max);
+    let mid_y = rect.center().y;
+    let to_screen = |index: usize, value: f32| {
+        let x = if n_frames <= 1 {
+            rect.left()
+        } else {
+            rect.left()
+                + rect.width() * index as f32 / (samples.len().saturating_sub(1).max(1)) as f32
+        };
+        let y = mid_y - (rect.height() * 0.45) * (value / max_mag).clamp(-1.0, 1.0);
+        egui::pos2(x, y)
+    };
+
+    painter.line_segment(
+        [egui::pos2(rect.left(), mid_y), egui::pos2(rect.right(), mid_y)],
+        Stroke::new(1.0, Color32::from_gray(90)),
+    );
+
+    let bar_width = (rect.width() / samples.len().max(1) as f32).max(2.0);
+    for (index, value) in samples.iter().enumerate() {
+        let x = rect.left() + rect.width() * index as f32 / samples.len().max(1) as f32;
+        let top = to_screen(index, *value).y;
+        let bar_rect = egui::Rect::from_min_max(
+            egui::pos2(x, top.min(mid_y)),
+            egui::pos2((x + bar_width).min(rect.right()), top.max(mid_y)),
+        );
+        let color = if *value >= 0.0 {
+            Color32::from_rgb(120, 200, 255)
+        } else {
+            Color32::from_rgb(255, 170, 120)
+        };
+        painter.rect_filled(bar_rect, 0.0, color);
+    }
+
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(format!(
+            "placeholder signed accumulation proxy   current {:.3}   samples {}",
+            samples.last().copied().unwrap_or(0.0),
+            samples.len()
+        ))
+        .small()
+        .color(Color32::LIGHT_GRAY),
+    );
 }
 
 fn draw_stats(
@@ -374,12 +651,14 @@ fn draw_stats(
     config: &ViewerConfig,
     stats: &StatsSnapshot,
     is_playing: &mut bool,
+    last_tick: &mut Instant,
 ) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Temporal Stats").strong());
         let label = if *is_playing { "Pause" } else { "Play" };
         if ui.button(label).clicked() {
             *is_playing = !*is_playing;
+            *last_tick = Instant::now();
         }
     });
 
@@ -389,7 +668,8 @@ fn draw_stats(
         .show(ui, |ui| {
             stat_row(ui, "state", if *is_playing { "playing" } else { "paused" });
             stat_row(ui, "frame", &format!("{}/{}", stats.display_frame, config.n_frames));
-            stat_row(ui, "loop", &stats.loop_count.to_string());
+            stat_row(ui, "window", &stats.window_number.to_string());
+            stat_row(ui, "stream", &stats.stream_position.to_string());
             stat_row(
                 ui,
                 "naive",
@@ -407,8 +687,8 @@ fn draw_stats(
                 "decode",
                 stats.decoded_message.as_deref().unwrap_or("none"),
             );
-            stat_row(ui, "key", &config.temporal_key);
-            stat_row(ui, "qr", &config.qr_payload);
+            stat_row(ui, "key", &stats.current_key);
+            stat_row(ui, "qr", &stats.current_qr_payload);
             stat_row(
                 ui,
                 "naive qr",
@@ -420,8 +700,9 @@ fn draw_stats(
                 &stats
                     .detector_score
                     .map(|score| format!("{score:.2}"))
-                    .unwrap_or_else(|| "pending".to_string()),
+                    .unwrap_or_else(|| "0.00".to_string()),
             );
+            stat_row(ui, "threshold", &format!("{:.2}", config.min_detector_score));
             stat_row(
                 ui,
                 "temporal",
@@ -439,12 +720,13 @@ fn stat_row(ui: &mut egui::Ui, label: &str, value: &str) {
 }
 
 fn compute_stats(
+    window: &StreamWindow,
     config: &ViewerConfig,
     naive_accumulator: &Grid<f32>,
     correlation_field: &Grid<f32>,
     frames: &[Grid<f32>],
     display_frame: usize,
-    loop_count: usize,
+    window_number: usize,
 ) -> StatsSnapshot {
     let naive_min = naive_accumulator
         .data()
@@ -490,6 +772,11 @@ fn compute_stats(
             .sum::<f32>()
             / correlation_field.len() as f32
     };
+    let corr_mean_signed = if correlation_field.is_empty() {
+        0.0
+    } else {
+        correlation_field.data().iter().sum::<f32>() / correlation_field.len() as f32
+    };
 
     let temporal_config = TemporalConfig::new(
         (config.width, config.height),
@@ -507,7 +794,7 @@ fn compute_stats(
                 decoder
                     .decode_qr(
                         frames,
-                        &config.temporal_key,
+                        &window.key,
                         &TemporalDecodePolicy::fixed_threshold(config.min_detector_score).ok()?,
                     )
                     .ok()
@@ -515,22 +802,29 @@ fn compute_stats(
                 None
             }
         });
+    let detector_score = decoder
+        .as_ref()
+        .and_then(|decoder| decoder.correlate_prefix(frames, &window.key).ok())
+        .map(|correlation| correlation.detector_score);
     let naive_qr_visible = naive_field(frames)
         .ok()
         .and_then(|field| try_extract_qr(&field))
         .is_some();
     let decoded_message = decoded.as_ref().and_then(|result| result.message.clone());
-    let detector_score = decoded.as_ref().map(|result| result.detector_score);
 
     StatsSnapshot {
         display_frame,
-        loop_count,
+        window_number,
+        stream_position: (window_number - 1) * config.n_frames + display_frame,
         naive_min,
         naive_max,
         naive_mean_abs,
         corr_min,
         corr_max,
         corr_mean_abs,
+        corr_mean_signed,
+        current_key: window.key.clone(),
+        current_qr_payload: window.qr_payload.clone(),
         decoded_message,
         naive_qr_visible,
         detector_score,
@@ -562,7 +856,11 @@ fn render_field_image(field: &Grid<f32>, fixed_range: f32) -> ColorImage {
     }
 }
 
-fn compute_correlation_prefix(config: &ViewerConfig, frames: &[Grid<f32>]) -> Result<Grid<f32>, String> {
+fn compute_correlation_prefix(
+    window: &StreamWindow,
+    config: &ViewerConfig,
+    frames: &[Grid<f32>],
+) -> Result<Grid<f32>, String> {
     let temporal_config = TemporalConfig::new(
         (config.width, config.height),
         config.n_frames,
@@ -573,9 +871,26 @@ fn compute_correlation_prefix(config: &ViewerConfig, frames: &[Grid<f32>]) -> Re
     let decoder =
         TemporalDecoder::new(temporal_config).map_err(|err| format!("failed to construct temporal decoder: {err}"))?;
     decoder
-        .correlate_prefix(frames, &config.temporal_key)
+        .correlate_prefix(frames, &window.key)
         .map(|correlation| correlation.field)
         .map_err(|err| format!("failed to correlate temporal prefix: {err}"))
+}
+
+fn build_stream_windows(encoder: &TemporalEncoder, args: &Args) -> Result<Vec<StreamWindow>, String> {
+    let mut windows = Vec::with_capacity(args.stream_windows);
+    for index in 0..args.stream_windows {
+        let key = format!("{}-w{:04}", args.master_key, index + 1);
+        let qr_payload = format!("{}-w{:04}", args.qr_payload, index + 1);
+        let frames = encoder
+            .encode_message(&key, &qr_payload)
+            .map_err(|err| format!("window {}: failed to encode frames: {err}", index + 1))?;
+        windows.push(StreamWindow {
+            key,
+            qr_payload,
+            frames,
+        });
+    }
+    Ok(windows)
 }
 
 fn map_symmetric_to_u8(value: f32, amplitude: f32) -> u8 {
