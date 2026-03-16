@@ -7,7 +7,7 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 
 - Phase 1 is complete.
 - Phase 2 is complete and validated with `cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` (109 passing tests as of 2026-03-15).
-- Phase 3 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` with 118 passing tests as of 2026-03-15).
+- Phase 3 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` with 120 passing tests as of 2026-03-15).
 - Phase 4 is the next implementation target.
 
 ## Architecture

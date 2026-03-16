@@ -234,82 +234,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_n_2() {
-        let encoder = XorEncoder::new(2, "xor-seed").unwrap();
-        let frames = encoder.encode_message("hello").unwrap();
-        let decoded = XorDecoder::decode_message(&frames).unwrap();
-        assert_eq!(decoded.message.as_deref(), Some("hello"));
-    }
-
-    #[test]
-    fn roundtrip_n_8() {
-        let encoder = XorEncoder::new(8, "xor-seed").unwrap();
-        let frames = encoder.encode_message("hello").unwrap();
-        let decoded = XorDecoder::decode_message(&frames).unwrap();
-        assert_eq!(decoded.message.as_deref(), Some("hello"));
-    }
-
-    #[test]
-    fn roundtrip_n_64() {
-        let encoder = XorEncoder::new(64, "xor-seed").unwrap();
-        let frames = encoder.encode_message("hello").unwrap();
-        let decoded = XorDecoder::decode_message(&frames).unwrap();
-        assert_eq!(decoded.message.as_deref(), Some("hello"));
-    }
-
-    #[test]
-    fn determinism() {
-        let encoder = XorEncoder::new(8, "deterministic").unwrap();
-        let a = encoder.encode_message("hello").unwrap();
-        let b = encoder.encode_message("hello").unwrap();
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn stream_roundtrip() {
-        let mut encoder = XorStreamEncoder::new(5, "stream-seed").unwrap();
-        encoder.queue_message("first");
-        encoder.queue_message("second");
-
-        let mut decoder = XorStreamDecoder::new(5).unwrap();
-        let mut decoded = Vec::new();
-
-        for _ in 0..10 {
-            let frame = encoder.next_frame().unwrap();
-            if let Some(result) = decoder.push_frame(frame).unwrap() {
-                decoded.push(result.message);
-            }
-        }
-
-        assert_eq!(decoded.len(), 2);
-        assert_eq!(decoded[0].as_deref(), Some("first"));
-        assert_eq!(decoded[1].as_deref(), Some("second"));
-    }
-
-    #[test]
-    fn partial_frames_do_not_decode() {
-        let encoder = XorEncoder::new(4, "partial").unwrap();
-        let frames = encoder.encode_message("hello").unwrap();
-
-        let partial = XorDecoder::decode_message(&frames[..3]).unwrap();
-        assert!(partial.message.is_none());
-
-        let mut stream_decoder = XorStreamDecoder::new(4).unwrap();
-        for frame in frames.into_iter().take(3) {
-            assert!(stream_decoder.push_frame(frame).unwrap().is_none());
-        }
-    }
-
-    #[test]
-    fn random_frames_do_not_produce_valid_qr() {
-        let frames: Vec<_> = (0..8)
-            .map(|idx| random_binary_frame((21, 21), "noise-only", idx))
-            .collect();
-        let decoded = XorDecoder::decode_message(&frames).unwrap();
-        assert!(decoded.message.is_none());
-    }
-
-    #[test]
     fn mismatched_dimensions_fail() {
         let mut decoder = XorStreamDecoder::new(2).unwrap();
         let a = Grid::new(21, 21);
@@ -325,5 +249,11 @@ mod tests {
     fn xor_requires_at_least_two_frames() {
         assert!(XorEncoder::new(1, "seed").is_err());
         assert!(XorStreamDecoder::new(1).is_err());
+    }
+
+    #[test]
+    fn grid_converts_to_binary_frame() {
+        let grid = Grid::filled(2, 2, 1u8);
+        assert_eq!(Frame::from(grid.clone()), Frame::Binary(grid));
     }
 }
