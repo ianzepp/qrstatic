@@ -128,6 +128,28 @@ impl TemporalEncoder {
     }
 
     pub fn encode_qr(&self, master_key: &str, qr_grid: &Grid<u8>) -> Result<Vec<Grid<f32>>> {
+        self.encode_qr_internal(master_key, qr_grid, true)
+    }
+
+    pub fn encode_message_signal(
+        &self,
+        master_key: &str,
+        qr_payload: &str,
+    ) -> Result<Vec<Grid<f32>>> {
+        let qr_grid = qr::encode::encode(qr_payload)?;
+        self.encode_qr_signal(master_key, &qr_grid)
+    }
+
+    pub fn encode_qr_signal(&self, master_key: &str, qr_grid: &Grid<u8>) -> Result<Vec<Grid<f32>>> {
+        self.encode_qr_internal(master_key, qr_grid, false)
+    }
+
+    fn encode_qr_internal(
+        &self,
+        master_key: &str,
+        qr_grid: &Grid<u8>,
+        include_noise: bool,
+    ) -> Result<Vec<Grid<f32>>> {
         let signal_map = build_l1_signal_map(qr_grid, self.config.frame_shape)?;
         let schedule =
             build_temporal_schedule(master_key, self.config.frame_shape, self.config.n_frames);
@@ -135,12 +157,16 @@ impl TemporalEncoder {
 
         for (frame_index, frame_schedule) in schedule.iter().enumerate().take(self.config.n_frames)
         {
-            let mut frame = noise_frame(
-                master_key,
-                frame_index,
-                self.config.frame_shape,
-                self.config.noise_amplitude,
-            );
+            let mut frame = if include_noise {
+                noise_frame(
+                    master_key,
+                    frame_index,
+                    self.config.frame_shape,
+                    self.config.noise_amplitude,
+                )
+            } else {
+                Grid::new(self.config.frame_shape.0, self.config.frame_shape.1)
+            };
             let permutation = frame_permutation(master_key, frame_index, self.config.frame_shape);
 
             for (logical_idx, (&chip, &signal)) in frame_schedule

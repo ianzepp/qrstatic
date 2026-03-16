@@ -493,11 +493,11 @@ fn append_results_tsv(
     args: &EvalArgs,
     summary: &EvalSummary,
 ) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
     }
 
     let needs_header = match fs::metadata(path) {

@@ -499,6 +499,25 @@ fn derive_tile_key(master_key: &str, tile_index: usize) -> String {
     format!("{}:tile:{}", master_key, tile_index)
 }
 
+fn validate_tiled_carrier_frames(frames: &[Grid<f32>], config: &TiledConfig) -> Result<()> {
+    if frames.len() != config.n_frames {
+        return Err(crate::Error::Codec(format!(
+            "expected {} carrier frames, got {}",
+            config.n_frames,
+            frames.len()
+        )));
+    }
+    for frame in frames {
+        if frame.width() != config.video_shape.0 || frame.height() != config.video_shape.1 {
+            return Err(crate::Error::GridMismatch {
+                expected: config.video_shape.0 * config.video_shape.1,
+                actual: frame.len(),
+            });
+        }
+    }
+    Ok(())
+}
+
 // ── RS encoding/decoding at tile level ─────────────────────────────────
 
 fn rs_encode_group(
@@ -622,6 +641,30 @@ impl TiledEncoder {
     }
 
     pub fn encode_payload(&self, master_key: &str, payload: &[u8]) -> Result<Vec<Grid<f32>>> {
+        let tile_payloads = self.build_tile_payloads(payload)?;
+        let all_tile_frames = self.encode_tile_frames(master_key, &tile_payloads, false)?;
+        Ok(self.compose_standalone_frames(master_key, &all_tile_frames))
+    }
+
+    pub fn encode_payload_over_carrier(
+        &self,
+        master_key: &str,
+        payload: &[u8],
+        carrier_frames: &[Grid<f32>],
+        clip_limit: f32,
+    ) -> Result<Vec<Grid<f32>>> {
+        if clip_limit <= 0.0 {
+            return Err(crate::Error::Codec(
+                "clip_limit must be greater than zero".into(),
+            ));
+        }
+        validate_tiled_carrier_frames(carrier_frames, &self.config)?;
+        let tile_payloads = self.build_tile_payloads(payload)?;
+        let all_tile_frames = self.encode_tile_frames(master_key, &tile_payloads, true)?;
+        self.overlay_on_carrier_frames(&all_tile_frames, carrier_frames, clip_limit)
+    }
+
+    fn build_tile_payloads(&self, payload: &[u8]) -> Result<Vec<Option<String>>> {
         let layout = &self.layout;
         if payload.len() > layout.max_payload_bytes {
             return Err(crate::Error::Codec(format!(
@@ -691,7 +734,16 @@ impl TiledEncoder {
             }
         }
 
-        // Create shared temporal encoder for all tiles
+        Ok(tile_payloads)
+    }
+
+    fn encode_tile_frames(
+        &self,
+        master_key: &str,
+        tile_payloads: &[Option<String>],
+        signal_only: bool,
+    ) -> Result<Vec<Option<Vec<Grid<f32>>>>> {
+        let layout = &self.layout;
         let tile_config = TemporalConfig::new(
             (layout.tile_size, layout.tile_size),
             self.config.n_frames,
@@ -705,10 +757,24 @@ impl TiledEncoder {
         for (tile_idx, qr_payload) in tile_payloads.iter().enumerate() {
             if let Some(payload_str) = qr_payload {
                 let tile_key = derive_tile_key(master_key, tile_idx);
-                let frames = tile_encoder.encode_message(&tile_key, payload_str)?;
+                let frames = if signal_only {
+                    tile_encoder.encode_message_signal(&tile_key, payload_str)?
+                } else {
+                    tile_encoder.encode_message(&tile_key, payload_str)?
+                };
                 all_tile_frames[tile_idx] = Some(frames);
             }
         }
+
+        Ok(all_tile_frames)
+    }
+
+    fn compose_standalone_frames(
+        &self,
+        master_key: &str,
+        all_tile_frames: &[Option<Vec<Grid<f32>>>],
+    ) -> Vec<Grid<f32>> {
+        let layout = &self.layout;
 
         // Compose into video-sized frames
         let (video_w, video_h) = self.config.video_shape;
@@ -744,7 +810,40 @@ impl TiledEncoder {
             video_frames.push(video_frame);
         }
 
-        Ok(video_frames)
+        video_frames
+    }
+
+    fn overlay_on_carrier_frames(
+        &self,
+        all_tile_frames: &[Option<Vec<Grid<f32>>>],
+        carrier_frames: &[Grid<f32>],
+        clip_limit: f32,
+    ) -> Result<Vec<Grid<f32>>> {
+        let layout = &self.layout;
+        let mut output = Vec::with_capacity(self.config.n_frames);
+
+        for (frame_idx, carrier_frame) in carrier_frames.iter().enumerate() {
+            let mut frame = carrier_frame.clone();
+
+            for (tile_idx, tile_frames) in
+                all_tile_frames.iter().enumerate().take(layout.total_tiles)
+            {
+                if let Some(frames) = tile_frames {
+                    let (ox, oy) = tile_origin(tile_idx, layout.tiles_x, layout.tile_size);
+                    let tile_frame = &frames[frame_idx];
+                    for row in 0..layout.tile_size {
+                        for col in 0..layout.tile_size {
+                            let value = frame[(oy + row, ox + col)] + tile_frame[(row, col)];
+                            frame[(oy + row, ox + col)] = value.clamp(-clip_limit, clip_limit);
+                        }
+                    }
+                }
+            }
+
+            output.push(frame);
+        }
+
+        Ok(output)
     }
 
     pub fn encode_stream_block(
@@ -754,6 +853,17 @@ impl TiledEncoder {
     ) -> Result<Vec<Grid<f32>>> {
         let encoded = block.encode()?;
         self.encode_payload(master_key, &encoded)
+    }
+
+    pub fn encode_stream_block_over_carrier(
+        &self,
+        master_key: &str,
+        block: &TiledStreamBlock,
+        carrier_frames: &[Grid<f32>],
+        clip_limit: f32,
+    ) -> Result<Vec<Grid<f32>>> {
+        let encoded = block.encode()?;
+        self.encode_payload_over_carrier(master_key, &encoded, carrier_frames, clip_limit)
     }
 }
 
@@ -1246,6 +1356,27 @@ mod tests {
         let block = TiledStreamBlock::new(42, 1, 3, b"stream payload".to_vec()).unwrap();
 
         let frames = encoder.encode_stream_block(master_key, &block).unwrap();
+
+        let policy = TemporalDecodePolicy::fixed_threshold(6.0).unwrap();
+        let decoder = TiledDecoder::new(config, master_key).unwrap();
+        let result = decoder
+            .decode_payload(&frames, master_key, &policy)
+            .unwrap();
+
+        assert_eq!(result.stream_block, Some(block));
+    }
+
+    #[test]
+    fn tiled_stream_block_roundtrip_over_flat_carrier() {
+        let config = TiledConfig::new((100, 100), 2, 64, 0.42, 0.22, 2, 1).unwrap();
+        let master_key = "test-tiled-overlay";
+        let encoder = TiledEncoder::new(config.clone(), master_key).unwrap();
+        let block = TiledStreamBlock::new(99, 0, 2, b"overlay payload".to_vec()).unwrap();
+        let carrier_frames = vec![Grid::new(100, 100); 64];
+
+        let frames = encoder
+            .encode_stream_block_over_carrier(master_key, &block, &carrier_frames, 1.0)
+            .unwrap();
 
         let policy = TemporalDecodePolicy::fixed_threshold(6.0).unwrap();
         let decoder = TiledDecoder::new(config, master_key).unwrap();
