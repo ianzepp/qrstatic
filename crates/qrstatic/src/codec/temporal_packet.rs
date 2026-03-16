@@ -15,7 +15,11 @@ pub struct TemporalPacketProfile {
 }
 
 impl TemporalPacketProfile {
-    pub fn new(data_shards: usize, parity_shards: usize, payload_bytes_per_packet: usize) -> Result<Self> {
+    pub fn new(
+        data_shards: usize,
+        parity_shards: usize,
+        payload_bytes_per_packet: usize,
+    ) -> Result<Self> {
         if data_shards == 0 {
             return Err(Error::Codec(
                 "temporal packet profile requires data_shards > 0".into(),
@@ -190,13 +194,17 @@ impl TemporalPacket {
     }
 }
 
-pub fn packetize_payload(payload: &[u8], profile: TemporalPacketProfile) -> Result<Vec<TemporalPacket>> {
+pub fn packetize_payload(
+    payload: &[u8],
+    profile: TemporalPacketProfile,
+) -> Result<Vec<TemporalPacket>> {
     let generator_rows = systematic_generator_rows(profile)?;
     let mut packets = Vec::new();
     let mut block_id = 0u32;
 
     for block in payload.chunks(profile.max_block_payload_len()) {
-        let mut data_shards = vec![vec![0u8; profile.payload_bytes_per_packet]; profile.data_shards];
+        let mut data_shards =
+            vec![vec![0u8; profile.payload_bytes_per_packet]; profile.data_shards];
         for (shard_index, shard) in data_shards.iter_mut().enumerate() {
             let start = shard_index * profile.payload_bytes_per_packet;
             let end = (start + profile.payload_bytes_per_packet).min(block.len());
@@ -262,7 +270,10 @@ pub fn encode_packet_stream(payload: &[u8], profile: TemporalPacketProfile) -> R
     Ok(stream)
 }
 
-pub fn packet_stream_layout(payload_len: usize, profile: TemporalPacketProfile) -> Result<Vec<usize>> {
+pub fn packet_stream_layout(
+    payload_len: usize,
+    profile: TemporalPacketProfile,
+) -> Result<Vec<usize>> {
     let template_payload = vec![0u8; payload_len];
     let packets = packetize_payload(&template_payload, profile)?;
     let mut layout = Vec::with_capacity(packets.len());
@@ -289,7 +300,9 @@ pub fn decode_packet_stream(
     let mut packets = Vec::with_capacity(layout.len());
     let mut offset = 0usize;
     for packet_len in layout {
-        packets.push(TemporalPacket::decode(&encoded[offset..offset + packet_len])?);
+        packets.push(TemporalPacket::decode(
+            &encoded[offset..offset + packet_len],
+        )?);
         offset += packet_len;
     }
     Ok(packets)
@@ -303,7 +316,10 @@ pub fn recover_payload(packets: &[TemporalPacket]) -> Result<Vec<u8>> {
     let mut blocks = BTreeMap::<u32, Vec<TemporalPacket>>::new();
     for packet in packets {
         packet.validate()?;
-        blocks.entry(packet.block_id).or_default().push(packet.clone());
+        blocks
+            .entry(packet.block_id)
+            .or_default()
+            .push(packet.clone());
     }
 
     let mut payload = Vec::new();
@@ -332,7 +348,9 @@ fn recover_block_data(block_packets: &[TemporalPacket]) -> Result<Vec<TemporalPa
     let mut selected = Vec::new();
     for packet in block_packets {
         if packet.block_id != first.block_id {
-            return Err(Error::Codec("mixed block ids in temporal packet recovery".into()));
+            return Err(Error::Codec(
+                "mixed block ids in temporal packet recovery".into(),
+            ));
         }
         if packet.data_shards != first.data_shards
             || packet.parity_shards != first.parity_shards
@@ -367,7 +385,8 @@ fn recover_block_data(block_packets: &[TemporalPacket]) -> Result<Vec<TemporalPa
     }
     let inverse = invert_matrix(&decode_matrix)?;
 
-    let mut recovered_shards = vec![vec![0u8; profile.payload_bytes_per_packet]; profile.data_shards];
+    let mut recovered_shards =
+        vec![vec![0u8; profile.payload_bytes_per_packet]; profile.data_shards];
     for byte_index in 0..profile.payload_bytes_per_packet {
         for data_index in 0..profile.data_shards {
             let mut acc = 0u8;
@@ -427,7 +446,8 @@ fn padded_packet_payload(
         return Ok(packet.payload.clone());
     }
 
-    let expected_len = expected_data_payload_len(profile, block_payload_len, packet.packet_id as usize)?;
+    let expected_len =
+        expected_data_payload_len(profile, block_payload_len, packet.packet_id as usize)?;
     if packet.payload.len() != expected_len {
         return Err(Error::Codec(format!(
             "data packet {} expected {} payload bytes, got {}",
@@ -478,7 +498,9 @@ fn multiply_row_by_matrix(row: &[u8], matrix: &[Vec<u8>]) -> Vec<u8> {
 fn invert_matrix(matrix: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
     let n = matrix.len();
     if n == 0 || matrix.iter().any(|row| row.len() != n) {
-        return Err(Error::Codec("cannot invert non-square GF(256) matrix".into()));
+        return Err(Error::Codec(
+            "cannot invert non-square GF(256) matrix".into(),
+        ));
     }
 
     let mut augmented = vec![vec![0u8; n * 2]; n];
@@ -491,7 +513,9 @@ fn invert_matrix(matrix: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
 
     for pivot in 0..n {
         let Some(swap_row) = (pivot..n).find(|&row| augmented[row][pivot] != 0) else {
-            return Err(Error::Codec("temporal packet matrix is not invertible".into()));
+            return Err(Error::Codec(
+                "temporal packet matrix is not invertible".into(),
+            ));
         };
         if swap_row != pivot {
             augmented.swap(pivot, swap_row);

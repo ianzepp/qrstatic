@@ -1,6 +1,6 @@
 use qrstatic::codec::temporal::{
-    TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, detector_score,
-    naive_field, try_extract_qr, TemporalLayer2Config,
+    TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, TemporalLayer2Config,
+    detector_score, naive_field, try_extract_qr,
 };
 use qrstatic::codec::temporal_packet::TemporalPacketProfile;
 use qrstatic::qr;
@@ -23,7 +23,9 @@ fn keyed_correlation_recovers_layer1_qr_message() {
     let frames = encoder
         .encode_message("temporal-master", "temporal-visible")
         .unwrap();
-    let decoded = decoder.decode_qr(&frames, "temporal-master", &policy).unwrap();
+    let decoded = decoder
+        .decode_qr(&frames, "temporal-master", &policy)
+        .unwrap();
 
     assert_eq!(decoded.message.as_deref(), Some("temporal-visible"));
     assert!(decoded.detector_score > 1.0);
@@ -51,7 +53,9 @@ fn wrong_window_fails_closed() {
     let decoder = TemporalDecoder::new(config).unwrap();
     let policy = test_policy();
 
-    let frames_a = encoder.encode_message("window-master", "window-qr").unwrap();
+    let frames_a = encoder
+        .encode_message("window-master", "window-qr")
+        .unwrap();
     let frames_b = encoder.encode_message("other-master", "other-qr").unwrap();
 
     let mut shifted = frames_a[1..].to_vec();
@@ -88,8 +92,14 @@ fn correct_key_score_exceeds_wrong_key_and_naive_baselines() {
     let wrong = decoder.correlation_score(&frames, "other-master").unwrap();
     let naive = detector_score(&naive_field(&frames).unwrap());
 
-    assert!(correct > wrong, "correct score {correct} should exceed wrong-key score {wrong}");
-    assert!(correct > naive, "correct score {correct} should exceed naive score {naive}");
+    assert!(
+        correct > wrong,
+        "correct score {correct} should exceed wrong-key score {wrong}"
+    );
+    assert!(
+        correct > naive,
+        "correct score {correct} should exceed naive score {naive}"
+    );
 }
 
 #[test]
@@ -126,18 +136,17 @@ fn single_frame_does_not_reveal_centered_qr_layout() {
         }
     }
 
-    assert!(agreement < total * 7 / 10, "single-frame centered agreement too high: {agreement}/{total}");
+    assert!(
+        agreement < total * 7 / 10,
+        "single-frame centered agreement too high: {agreement}/{total}"
+    );
 }
 
 #[test]
 fn temporal_layer2_packet_payload_roundtrip() {
     let config = TemporalConfig::new((41, 41), 64, 0.42, 0.22).unwrap();
-    let layer2 = TemporalLayer2Config::new(
-        0.08,
-        12,
-        TemporalPacketProfile::new(2, 1, 8).unwrap(),
-    )
-    .unwrap();
+    let layer2 =
+        TemporalLayer2Config::new(0.08, 12, TemporalPacketProfile::new(2, 1, 8).unwrap()).unwrap();
     let encoder = TemporalEncoder::new(config.clone()).unwrap();
     let decoder = TemporalDecoder::new(config).unwrap();
     let policy = TemporalDecodePolicy::fixed_threshold(6.0).unwrap();

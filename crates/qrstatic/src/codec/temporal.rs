@@ -1,7 +1,7 @@
 use crate::codec::common::{extract_qr_from_sign_grid, validate_matching_frames};
 use crate::codec::temporal_packet::{
-    TemporalPacket, TemporalPacketProfile, decode_packet_stream, encode_packet_stream, packet_stream_layout,
-    recover_payload,
+    TemporalPacket, TemporalPacketProfile, decode_packet_stream, encode_packet_stream,
+    packet_stream_layout, recover_payload,
 };
 use crate::error::{Error, Result};
 use crate::{Grid, Prng, bits, qr};
@@ -133,17 +133,20 @@ impl TemporalEncoder {
             build_temporal_schedule(master_key, self.config.frame_shape, self.config.n_frames);
         let mut frames = Vec::with_capacity(self.config.n_frames);
 
-        for frame_index in 0..self.config.n_frames {
+        for (frame_index, frame_schedule) in schedule
+            .iter()
+            .enumerate()
+            .take(self.config.n_frames)
+        {
             let mut frame = noise_frame(
                 master_key,
                 frame_index,
                 self.config.frame_shape,
                 self.config.noise_amplitude,
             );
-            let permutation =
-                frame_permutation(master_key, frame_index, self.config.frame_shape);
+            let permutation = frame_permutation(master_key, frame_index, self.config.frame_shape);
 
-            for (logical_idx, (&chip, &signal)) in schedule[frame_index]
+            for (logical_idx, (&chip, &signal)) in frame_schedule
                 .data()
                 .iter()
                 .zip(signal_map.data().iter())
@@ -176,10 +179,15 @@ impl TemporalEncoder {
 
         let qr_grid = qr::encode::encode(qr_payload)?;
         let signal_map = build_l1_signal_map(&qr_grid, self.config.frame_shape)?;
-        let l1_schedule = build_temporal_schedule(master_key, self.config.frame_shape, self.config.n_frames);
+        let l1_schedule =
+            build_temporal_schedule(master_key, self.config.frame_shape, self.config.n_frames);
         let l2_signal_map = build_l2_signal_map(payload, layer2, self.config.frame_shape)?;
-        let l2_schedule =
-            build_temporal_schedule_domain(master_key, self.config.frame_shape, self.config.n_frames, "l2");
+        let l2_schedule = build_temporal_schedule_domain(
+            master_key,
+            self.config.frame_shape,
+            self.config.n_frames,
+            "l2",
+        );
         let mut frames = Vec::with_capacity(self.config.n_frames);
 
         for frame_index in 0..self.config.n_frames {
@@ -189,11 +197,9 @@ impl TemporalEncoder {
                 self.config.frame_shape,
                 self.config.noise_amplitude,
             );
-            let permutation =
-                frame_permutation(master_key, frame_index, self.config.frame_shape);
+            let permutation = frame_permutation(master_key, frame_index, self.config.frame_shape);
 
-            for logical_idx in 0..signal_map.len() {
-                let physical_idx = permutation[logical_idx];
+            for (logical_idx, &physical_idx) in permutation.iter().enumerate().take(signal_map.len()) {
                 let l1 = self.config.l1_amplitude
                     * signal_map.data()[logical_idx]
                     * l1_schedule[frame_index].data()[logical_idx];
@@ -263,7 +269,11 @@ impl TemporalDecoder {
         })
     }
 
-    pub fn correlate(&self, frames: &[Grid<f32>], temporal_key: &str) -> Result<TemporalCorrelation> {
+    pub fn correlate(
+        &self,
+        frames: &[Grid<f32>],
+        temporal_key: &str,
+    ) -> Result<TemporalCorrelation> {
         validate_temporal_frames(frames, &self.config)?;
         self.correlate_prefix(frames, temporal_key)
     }
@@ -288,8 +298,9 @@ impl TemporalDecoder {
         }
 
         let sign_grid = sign_grid_from_field(&correlation.field);
-        let qr = extract_qr_from_sign_grid(&sign_grid)
-            .ok_or_else(|| Error::Codec("could not extract a valid QR crop from temporal field".into()))?;
+        let qr = extract_qr_from_sign_grid(&sign_grid).ok_or_else(|| {
+            Error::Codec("could not extract a valid QR crop from temporal field".into())
+        })?;
         let message = qr::decode::decode(&qr).ok();
         let detector_score = correlation.detector_score;
 
@@ -309,15 +320,12 @@ impl TemporalDecoder {
         layer2: &TemporalLayer2Config,
     ) -> Result<TemporalLayer2DecodeResult> {
         let layer1 = self.decode_qr(frames, temporal_key, policy)?;
-        let residual_field = correlate_layer2_residual(
-            frames,
-            temporal_key,
-            &self.config,
-            &layer1.qr,
-            layer2,
-        )?;
-        let packet_stream = decode_l2_packet_stream(&residual_field, layer2, self.config.frame_shape)?;
-        let packets = decode_packet_stream(&packet_stream, layer2.payload_len, layer2.packet_profile)?;
+        let residual_field =
+            correlate_layer2_residual(frames, temporal_key, &self.config, &layer1.qr, layer2)?;
+        let packet_stream =
+            decode_l2_packet_stream(&residual_field, layer2, self.config.frame_shape)?;
+        let packets =
+            decode_packet_stream(&packet_stream, layer2.payload_len, layer2.packet_profile)?;
         let payload = recover_payload(&packets)?;
 
         Ok(TemporalLayer2DecodeResult {
@@ -345,7 +353,7 @@ fn validate_temporal_params(
             "temporal encoding requires at least 4 frames".into(),
         ));
     }
-    if n_frames % 2 != 0 {
+    if !n_frames.is_multiple_of(2) {
         return Err(Error::Codec(
             "temporal encoding requires an even frame count for balanced schedules".into(),
         ));
@@ -415,11 +423,8 @@ fn build_l1_signal_map(qr_grid: &Grid<u8>, frame_shape: (usize, usize)) -> Resul
 
     for row in 0..qr_grid.height() {
         for col in 0..qr_grid.width() {
-            signal[(row + row_offset, col + col_offset)] = if qr_grid[(row, col)] == 0 {
-                1.0
-            } else {
-                -1.0
-            };
+            signal[(row + row_offset, col + col_offset)] =
+                if qr_grid[(row, col)] == 0 { 1.0 } else { -1.0 };
         }
     }
 
@@ -441,8 +446,7 @@ fn build_temporal_schedule_domain(
     domain: &str,
 ) -> Vec<Grid<f32>> {
     let n_cells = frame_shape.0 * frame_shape.1;
-    let mut schedule =
-        vec![Grid::filled(frame_shape.0, frame_shape.1, 0.0f32); n_frames];
+    let mut schedule = vec![Grid::filled(frame_shape.0, frame_shape.1, 0.0f32); n_frames];
 
     for cell_idx in 0..n_cells {
         let mut chips = vec![1.0f32; n_frames / 2];
@@ -509,12 +513,12 @@ fn correlate_layer2_residual(
         let permutation = frame_permutation(temporal_key, frame_index, config.frame_shape);
         let logical_frame = unpermute_grid(&frames[frame_index], &permutation);
 
-        for logical_idx in 0..logical_frame.len() {
+        for (logical_idx, acc) in data.iter_mut().enumerate().take(logical_frame.len()) {
             let l1 = config.l1_amplitude
                 * l1_signal_map.data()[logical_idx]
                 * l1_schedule[frame_index].data()[logical_idx];
             let residual = logical_frame.data()[logical_idx] - l1;
-            data[logical_idx] += residual * l2_schedule[frame_index].data()[logical_idx];
+            *acc += residual * l2_schedule[frame_index].data()[logical_idx];
         }
     }
 
@@ -522,7 +526,11 @@ fn correlate_layer2_residual(
     for value in &mut data {
         *value /= layer2.amplitude.max(1e-6);
     }
-    Ok(Grid::from_vec(data, config.frame_shape.0, config.frame_shape.1))
+    Ok(Grid::from_vec(
+        data,
+        config.frame_shape.0,
+        config.frame_shape.1,
+    ))
 }
 
 fn decode_l2_packet_stream(
@@ -541,8 +549,7 @@ fn decode_l2_packet_stream(
     if n_bits > n_cells {
         return Err(Error::Codec(format!(
             "temporal Layer 2 decode needs {} cells for packet stream bits, but frame only has {} cells",
-            n_bits,
-            n_cells
+            n_bits, n_cells
         )));
     }
 
@@ -559,7 +566,11 @@ fn decode_l2_packet_stream(
     Ok(decoded_bytes)
 }
 
-fn frame_permutation(master_key: &str, frame_index: usize, frame_shape: (usize, usize)) -> Vec<usize> {
+fn frame_permutation(
+    master_key: &str,
+    frame_index: usize,
+    frame_shape: (usize, usize),
+) -> Vec<usize> {
     let len = frame_shape.0 * frame_shape.1;
     let mut permutation: Vec<usize> = (0..len).collect();
     let mut rng = Prng::from_str_seed(&format!(
@@ -646,10 +657,7 @@ mod tests {
     fn schedules_are_balanced_per_cell() {
         let schedule = build_temporal_schedule("balance", (7, 7), 8);
         for cell_idx in 0..49 {
-            let sum: f32 = schedule
-                .iter()
-                .map(|frame| frame.data()[cell_idx])
-                .sum();
+            let sum: f32 = schedule.iter().map(|frame| frame.data()[cell_idx]).sum();
             assert_eq!(sum, 0.0);
         }
     }

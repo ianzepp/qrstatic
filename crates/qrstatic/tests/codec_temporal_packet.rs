@@ -71,9 +71,7 @@ fn recover_payload_fails_when_block_is_missing_too_many_shards() {
         .collect();
 
     let err = recover_payload(&survivors).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("only has 3 unique shards, need 4"));
+    assert!(err.to_string().contains("only has 3 unique shards, need 4"));
 }
 
 fn crc32_for_test(bytes: &[u8]) -> u32 {
