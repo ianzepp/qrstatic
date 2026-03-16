@@ -1,4 +1,7 @@
 use std::env;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use qrstatic::codec::temporal::{
@@ -19,6 +22,14 @@ fn main() -> ExitCode {
     match run_eval(&args) {
         Ok(summary) => {
             print_summary(&args, &summary);
+            if let Some(path) = &args.results_tsv {
+                if let Err(err) = append_results_tsv(path, &args, &summary) {
+                    eprintln!("failed to append results tsv: {err}");
+                    return ExitCode::from(1);
+                }
+                println!();
+                println!("results_tsv: {}", path.display());
+            }
             ExitCode::SUCCESS
         }
         Err(err) => {
@@ -30,31 +41,38 @@ fn main() -> ExitCode {
 
 #[derive(Debug, Clone, PartialEq)]
 struct EvalArgs {
+    profile: String,
     trials: usize,
     width: usize,
     height: usize,
     frames: usize,
     noise_amplitude: f32,
     l1_amplitude: f32,
+    threshold: f32,
     key_prefix: String,
     qr_prefix: String,
+    results_tsv: Option<PathBuf>,
 }
 
 impl EvalArgs {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut parsed = Self {
+            profile: "stage1-default".into(),
             trials: 32,
             width: 41,
             height: 41,
             frames: 64,
             noise_amplitude: 0.3,
             l1_amplitude: 0.35,
+            threshold: 6.0,
             key_prefix: "temporal-eval".into(),
             qr_prefix: "temporal-bootstrap".into(),
+            results_tsv: None,
         };
 
         while let Some(flag) = args.next() {
             match flag.as_str() {
+                "--profile" => parsed.profile = next_value(&mut args, "--profile")?,
                 "--trials" => parsed.trials = parse_usize(&next_value(&mut args, "--trials")?, "--trials")?,
                 "--width" => parsed.width = parse_usize(&next_value(&mut args, "--width")?, "--width")?,
                 "--height" => parsed.height = parse_usize(&next_value(&mut args, "--height")?, "--height")?,
@@ -67,8 +85,16 @@ impl EvalArgs {
                     parsed.l1_amplitude =
                         parse_f32(&next_value(&mut args, "--l1-amplitude")?, "--l1-amplitude")?
                 }
+                "--threshold" => {
+                    parsed.threshold =
+                        parse_f32(&next_value(&mut args, "--threshold")?, "--threshold")?
+                }
                 "--key-prefix" => parsed.key_prefix = next_value(&mut args, "--key-prefix")?,
                 "--qr-prefix" => parsed.qr_prefix = next_value(&mut args, "--qr-prefix")?,
+                "--results-tsv" => {
+                    parsed.results_tsv =
+                        Some(PathBuf::from(next_value(&mut args, "--results-tsv")?))
+                }
                 "--help" | "-h" => return Err(help_text()),
                 other => return Err(format!("unknown flag: {other}\n\n{}", help_text())),
             }
@@ -104,7 +130,8 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
     .map_err(|err| err.to_string())?;
     let encoder = TemporalEncoder::new(config.clone()).map_err(|err| err.to_string())?;
     let decoder = TemporalDecoder::new(config).map_err(|err| err.to_string())?;
-    let policy = TemporalDecodePolicy::fixed_threshold(6.0).map_err(|err| err.to_string())?;
+    let policy =
+        TemporalDecodePolicy::fixed_threshold(args.threshold).map_err(|err| err.to_string())?;
 
     let mut summary = EvalSummary {
         correct_decode_successes: 0,
@@ -195,8 +222,15 @@ fn print_summary(args: &EvalArgs, summary: &EvalSummary) {
     println!();
     println!("config:");
     println!(
-        "  trials={} frame={}x{} window={} noise_amplitude={:.3} l1_amplitude={:.3}",
-        args.trials, args.width, args.height, args.frames, args.noise_amplitude, args.l1_amplitude
+        "  profile={} trials={} frame={}x{} window={} noise_amplitude={:.3} l1_amplitude={:.3} threshold={:.3}",
+        args.profile,
+        args.trials,
+        args.width,
+        args.height,
+        args.frames,
+        args.noise_amplitude,
+        args.l1_amplitude,
+        args.threshold
     );
     println!(
         "  key_prefix={} qr_prefix={}",
@@ -282,6 +316,90 @@ fn percent(count: usize, total: usize) -> f32 {
     (count as f32 * 100.0) / total as f32
 }
 
+fn append_results_tsv(
+    path: &PathBuf,
+    args: &EvalArgs,
+    summary: &EvalSummary,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+        }
+    }
+
+    let needs_header = match fs::metadata(path) {
+        Ok(metadata) => metadata.len() == 0,
+        Err(_) => true,
+    };
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| format!("failed to open {}: {err}", path.display()))?;
+
+    if needs_header {
+        writeln!(
+            file,
+            "profile\ttrials\twidth\theight\tframes\tnoise_amplitude\tl1_amplitude\tthreshold\tcorrect_decode_pct\twrong_key_pct\twrong_window_pct\tnaive_decode_pct\tcorrect_score_mean\twrong_key_score_mean\twrong_window_score_mean\tnaive_score_mean\tcorrect_wrong_key_margin_mean\tcorrect_wrong_window_margin_mean\tcorrect_naive_margin_mean\tkey_prefix\tqr_prefix"
+        )
+        .map_err(|err| format!("failed to write header to {}: {err}", path.display()))?;
+    }
+
+    let correct_stats = ScoreStats::from_values(&summary.correct_scores);
+    let wrong_key_stats = ScoreStats::from_values(&summary.wrong_key_scores);
+    let wrong_window_stats = ScoreStats::from_values(&summary.wrong_window_scores);
+    let naive_stats = ScoreStats::from_values(&summary.naive_scores);
+    let correct_wrong_key_margins: Vec<f32> = summary
+        .correct_scores
+        .iter()
+        .zip(summary.wrong_key_scores.iter())
+        .map(|(a, b)| a - b)
+        .collect();
+    let correct_wrong_window_margins: Vec<f32> = summary
+        .correct_scores
+        .iter()
+        .zip(summary.wrong_window_scores.iter())
+        .map(|(a, b)| a - b)
+        .collect();
+    let correct_naive_margins: Vec<f32> = summary
+        .correct_scores
+        .iter()
+        .zip(summary.naive_scores.iter())
+        .map(|(a, b)| a - b)
+        .collect();
+
+    writeln!(
+        file,
+        "{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{}\t{}",
+        args.profile,
+        args.trials,
+        args.width,
+        args.height,
+        args.frames,
+        args.noise_amplitude,
+        args.l1_amplitude,
+        args.threshold,
+        percent(summary.correct_decode_successes, args.trials),
+        percent(summary.wrong_key_decode_successes, args.trials),
+        percent(summary.wrong_window_decode_successes, args.trials),
+        percent(summary.naive_decode_successes, args.trials),
+        correct_stats.mean,
+        wrong_key_stats.mean,
+        wrong_window_stats.mean,
+        naive_stats.mean,
+        ScoreStats::from_values(&correct_wrong_key_margins).mean,
+        ScoreStats::from_values(&correct_wrong_window_margins).mean,
+        ScoreStats::from_values(&correct_naive_margins).mean,
+        args.key_prefix,
+        args.qr_prefix
+    )
+    .map_err(|err| format!("failed to append row to {}: {err}", path.display()))?;
+
+    Ok(())
+}
+
 fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     args.next()
         .ok_or_else(|| format!("missing value for {flag}"))
@@ -307,14 +425,17 @@ fn help_text() -> String {
         "    cargo run -p qrstatic-cli --bin qrstatic-temporal-eval -- [options]",
         "",
         "OPTIONS:",
+        "    --profile <name>",
         "    --trials <count>",
         "    --width <cells>",
         "    --height <cells>",
         "    --frames <count>",
         "    --noise-amplitude <float>",
         "    --l1-amplitude <float>",
+        "    --threshold <float>",
         "    --key-prefix <text>",
         "    --qr-prefix <text>",
+        "    --results-tsv <path>",
     ]
     .join("\n")
 }
