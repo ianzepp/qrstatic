@@ -377,12 +377,16 @@ fn place_format_info(grid: &mut Grid<u8>, version: &VersionInfo, mask_pattern: u
     }
 }
 
-/// Encode a string into a QR code grid.
+/// Maximum byte-mode payload size for a given version at EC level H.
+pub const fn max_payload_bytes(version: &VersionInfo) -> usize {
+    version.total_data_codewords().saturating_sub(2)
+}
+
+/// Encode raw bytes into a QR code grid.
 ///
 /// Returns a `Grid<u8>` where 1=black module, 0=white module.
 /// Uses byte mode encoding, EC level H, auto-selects smallest version (1-6).
-pub fn encode(data: &str) -> Result<Grid<u8>> {
-    let data_bytes = data.as_bytes();
+pub fn encode_bytes(data_bytes: &[u8]) -> Result<Grid<u8>> {
     let version = select_version(data_bytes.len())?;
 
     let encoded = encode_data_bits(data_bytes, version.total_data_codewords());
@@ -396,6 +400,14 @@ pub fn encode(data: &str) -> Result<Grid<u8>> {
     place_format_info(&mut grid, version, best_mask);
 
     Ok(grid)
+}
+
+/// Encode a string into a QR code grid.
+///
+/// Returns a `Grid<u8>` where 1=black module, 0=white module.
+/// Uses byte mode encoding, EC level H, auto-selects smallest version (1-6).
+pub fn encode(data: &str) -> Result<Grid<u8>> {
+    encode_bytes(data.as_bytes())
 }
 
 /// Get the version info for a grid of the given size.

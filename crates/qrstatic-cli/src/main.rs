@@ -605,7 +605,8 @@ mod tests {
         let effective = resolve_binary_encode_config(&args, &payload).unwrap();
         assert_eq!(effective.width, 25);
         assert_eq!(effective.height, 25);
-        assert_eq!(effective.n_frames, 20);
+        assert!(effective.n_frames <= 20);
+        assert!(effective.n_frames >= 4);
     }
 
     #[test]

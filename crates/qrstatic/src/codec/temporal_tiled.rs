@@ -9,156 +9,81 @@ use crate::qr::encode::version_for_number;
 use crate::qr::gf256;
 use crate::{Grid, Result};
 
-// ── Base64url utilities ────────────────────────────────────────────────
-
-const BASE64URL_CHARS: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const PAYLOAD_LEN_SIZE: usize = 4; // u32 LE logical payload length
 const TILED_STREAM_BLOCK_MAGIC: &[u8; 4] = b"QTT1";
 const TILED_STREAM_BLOCK_VERSION: u8 = 1;
 const TILED_STREAM_BLOCK_HEADER_LEN: usize = 29;
 
-fn base64url_encoded_len(raw_len: usize) -> usize {
-    let full_chunks = raw_len / 3;
-    let remainder = raw_len % 3;
-    full_chunks * 4
-        + match remainder {
-            0 => 0,
-            1 => 2,
-            2 => 3,
-            _ => 0,
-        }
-}
-
-fn base64url_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(base64url_encoded_len(bytes.len()));
-    let mut i = 0usize;
-    while i + 3 <= bytes.len() {
-        let chunk =
-            ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
-        s.push(BASE64URL_CHARS[((chunk >> 18) & 0x3f) as usize] as char);
-        s.push(BASE64URL_CHARS[((chunk >> 12) & 0x3f) as usize] as char);
-        s.push(BASE64URL_CHARS[((chunk >> 6) & 0x3f) as usize] as char);
-        s.push(BASE64URL_CHARS[(chunk & 0x3f) as usize] as char);
-        i += 3;
-    }
-
-    match bytes.len() - i {
-        1 => {
-            let chunk = (bytes[i] as u32) << 16;
-            s.push(BASE64URL_CHARS[((chunk >> 18) & 0x3f) as usize] as char);
-            s.push(BASE64URL_CHARS[((chunk >> 12) & 0x3f) as usize] as char);
-        }
-        2 => {
-            let chunk = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8);
-            s.push(BASE64URL_CHARS[((chunk >> 18) & 0x3f) as usize] as char);
-            s.push(BASE64URL_CHARS[((chunk >> 12) & 0x3f) as usize] as char);
-            s.push(BASE64URL_CHARS[((chunk >> 6) & 0x3f) as usize] as char);
-        }
-        _ => {}
-    }
-
-    s
-}
-
-fn base64url_decode(s: &str) -> Result<Vec<u8>> {
-    if s.len() % 4 == 1 {
-        return Err(crate::Error::Codec(
-            "base64url string has invalid length".into(),
-        ));
-    }
-
-    let mut out = Vec::with_capacity((s.len() * 3) / 4);
-    let bytes = s.as_bytes();
-    let mut i = 0usize;
-
-    while i + 4 <= bytes.len() {
-        let a = base64url_value(bytes[i])? as u32;
-        let b = base64url_value(bytes[i + 1])? as u32;
-        let c = base64url_value(bytes[i + 2])? as u32;
-        let d = base64url_value(bytes[i + 3])? as u32;
-        let chunk = (a << 18) | (b << 12) | (c << 6) | d;
-        out.push(((chunk >> 16) & 0xff) as u8);
-        out.push(((chunk >> 8) & 0xff) as u8);
-        out.push((chunk & 0xff) as u8);
-        i += 4;
-    }
-
-    match bytes.len() - i {
-        0 => {}
-        2 => {
-            let a = base64url_value(bytes[i])? as u32;
-            let b = base64url_value(bytes[i + 1])? as u32;
-            let chunk = (a << 18) | (b << 12);
-            out.push(((chunk >> 16) & 0xff) as u8);
-        }
-        3 => {
-            let a = base64url_value(bytes[i])? as u32;
-            let b = base64url_value(bytes[i + 1])? as u32;
-            let c = base64url_value(bytes[i + 2])? as u32;
-            let chunk = (a << 18) | (b << 12) | (c << 6);
-            out.push(((chunk >> 16) & 0xff) as u8);
-            out.push(((chunk >> 8) & 0xff) as u8);
-        }
-        _ => {
-            return Err(crate::Error::Codec(
-                "base64url string has invalid trailing length".into(),
-            ));
-        }
-    }
-
-    Ok(out)
-}
-
-fn base64url_value(b: u8) -> Result<u8> {
-    match b {
-        b'A'..=b'Z' => Ok(b - b'A'),
-        b'a'..=b'z' => Ok(b - b'a' + 26),
-        b'0'..=b'9' => Ok(b - b'0' + 52),
-        b'-' => Ok(62),
-        b'_' => Ok(63),
-        _ => Err(crate::Error::Codec(format!(
-            "invalid base64url char: {}",
-            b as char
-        ))),
-    }
-}
-
 // ── Tile payload header ────────────────────────────────────────────────
 
-const TILE_HEADER_SIZE: usize = 5; // group_id: u16 LE + shard_id: u8 + shard_crc16: u16 LE
+const TILE_CHECK_SIZE: usize = 2; // shard_crc16: u16 LE
+const CONTROL_HEADER_LEN: usize = 24; // session_id + block_index + block_count + payload_len + payload_crc32
 
 fn shard_crc16(bytes: &[u8]) -> u16 {
     (crc32(bytes) & 0xffff) as u16
 }
 
-fn encode_tile_payload(group_id: u16, shard_id: u8, shard_data: &[u8]) -> String {
-    let mut raw = Vec::with_capacity(TILE_HEADER_SIZE + shard_data.len());
-    raw.extend_from_slice(&group_id.to_le_bytes());
-    raw.push(shard_id);
+fn encode_tile_payload(shard_data: &[u8]) -> Vec<u8> {
+    let mut raw = Vec::with_capacity(TILE_CHECK_SIZE + shard_data.len());
     raw.extend_from_slice(&shard_crc16(shard_data).to_le_bytes());
     raw.extend_from_slice(shard_data);
-    base64url_encode(&raw)
+    raw
 }
 
-fn decode_tile_payload(encoded: &str) -> Result<(u16, u8, Vec<u8>)> {
-    let raw = base64url_decode(encoded)?;
-    if raw.len() < TILE_HEADER_SIZE {
+fn decode_tile_payload(raw: &[u8]) -> Result<Vec<u8>> {
+    if raw.len() < TILE_CHECK_SIZE {
         return Err(crate::Error::Codec(
             "tile payload too short for header".into(),
         ));
     }
-    let group_id = u16::from_le_bytes([raw[0], raw[1]]);
-    let shard_id = raw[2];
-    let expected_crc = u16::from_le_bytes([raw[3], raw[4]]);
-    let shard_data = raw[TILE_HEADER_SIZE..].to_vec();
+    let expected_crc = u16::from_le_bytes([raw[0], raw[1]]);
+    let shard_data = raw[TILE_CHECK_SIZE..].to_vec();
     let actual_crc = shard_crc16(&shard_data);
     if actual_crc != expected_crc {
         return Err(crate::Error::Codec(format!(
             "tile shard CRC mismatch: expected {expected_crc:#06x}, got {actual_crc:#06x}"
         )));
     }
-    Ok((group_id, shard_id, shard_data))
+    Ok(shard_data)
+}
+
+fn encode_control_header(header: &TiledStreamBlockHeader) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(CONTROL_HEADER_LEN);
+    bytes.extend_from_slice(&header.session_id.to_le_bytes());
+    bytes.extend_from_slice(&header.block_index.to_le_bytes());
+    bytes.extend_from_slice(&header.block_count.to_le_bytes());
+    bytes.extend_from_slice(&header.payload_len.to_le_bytes());
+    bytes.extend_from_slice(&header.payload_crc32.to_le_bytes());
+    bytes
+}
+
+fn decode_control_header(raw: &[u8]) -> Result<TiledStreamBlockHeader> {
+    if raw.len() < CONTROL_HEADER_LEN {
+        return Err(crate::Error::Codec(format!(
+            "control header requires {CONTROL_HEADER_LEN} bytes, got {}",
+            raw.len()
+        )));
+    }
+
+    let mut session_id_bytes = [0u8; 8];
+    session_id_bytes.copy_from_slice(&raw[0..8]);
+    let mut block_index_bytes = [0u8; 4];
+    block_index_bytes.copy_from_slice(&raw[8..12]);
+    let mut block_count_bytes = [0u8; 4];
+    block_count_bytes.copy_from_slice(&raw[12..16]);
+    let mut payload_len_bytes = [0u8; 4];
+    payload_len_bytes.copy_from_slice(&raw[16..20]);
+    let mut payload_crc_bytes = [0u8; 4];
+    payload_crc_bytes.copy_from_slice(&raw[20..24]);
+
+    Ok(TiledStreamBlockHeader {
+        version: TILED_STREAM_BLOCK_VERSION,
+        session_id: u64::from_le_bytes(session_id_bytes),
+        block_index: u32::from_le_bytes(block_index_bytes),
+        block_count: u32::from_le_bytes(block_count_bytes),
+        payload_len: u32::from_le_bytes(payload_len_bytes),
+        payload_crc32: u32::from_le_bytes(payload_crc_bytes),
+    })
 }
 
 // ── Stream block framing ───────────────────────────────────────────────
@@ -370,24 +295,29 @@ impl TiledConfig {
             parity_shards,
         };
 
-        // Validate that at least one group fits
+        // Validate that one control group plus payload groups fit.
         let layout = compute_layout(&config)?;
         if layout.shard_data_bytes == 0 {
             return Err(crate::Error::Codec(
                 "QR version too small for tiled payload header overhead".into(),
             ));
         }
-        if layout.n_groups == 0 {
+        if layout.n_groups < 2 {
             return Err(crate::Error::Codec(
-                "video too small for even one RS group at this QR version".into(),
+                "video too small for one control group plus one payload group".into(),
             ));
         }
-        if layout.n_groups > u16::MAX as usize + 1 {
+        if layout.control_data_bytes < CONTROL_HEADER_LEN {
+            return Err(crate::Error::Codec(format!(
+                "control group capacity {} bytes is smaller than required control header {} bytes",
+                layout.control_data_bytes, CONTROL_HEADER_LEN
+            )));
+        }
+        if layout.payload_groups == 0 {
             return Err(crate::Error::Codec(
-                "video produces more tiled groups than fit in the u16 tile header".into(),
+                "tiled layout has no payload groups after reserving control tiles".into(),
             ));
         }
-
         Ok(config)
     }
 }
@@ -404,8 +334,10 @@ pub struct TiledLayout {
     pub dead_y: usize,
     pub group_size: usize,
     pub n_groups: usize,
+    pub payload_groups: usize,
     pub active_tiles: usize,
     pub shard_data_bytes: usize,
+    pub control_data_bytes: usize,
     pub max_payload_bytes: usize,
     /// tile_assignments[tile_index] = Some((group_id, shard_index)) for active tiles, None for inactive.
     pub tile_assignments: Vec<Option<(usize, usize)>>,
@@ -426,16 +358,12 @@ fn compute_layout(config: &TiledConfig) -> Result<TiledLayout> {
     let n_groups = total_tiles / group_size;
     let active_tiles = n_groups * group_size;
 
-    // Compute shard data capacity per tile.
-    // QR capacity in bytes (byte-mode): total_data_codewords - 2 (mode + char count overhead)
-    let qr_capacity_bytes = version_info.total_data_codewords().saturating_sub(2);
-    // Base64url expands raw bytes to ceil(4n/3) chars without padding.
-    let mut shard_data_bytes = 0usize;
-    while base64url_encoded_len(TILE_HEADER_SIZE + shard_data_bytes + 1) <= qr_capacity_bytes {
-        shard_data_bytes += 1;
-    }
-
-    let raw_payload_capacity = n_groups * config.data_shards * shard_data_bytes;
+    // Raw byte-mode QR payload capacity, minus the per-tile CRC bytes.
+    let qr_capacity_bytes = crate::qr::encode::max_payload_bytes(version_info);
+    let shard_data_bytes = qr_capacity_bytes.saturating_sub(TILE_CHECK_SIZE);
+    let payload_groups = n_groups.saturating_sub(1);
+    let control_data_bytes = config.data_shards * shard_data_bytes;
+    let raw_payload_capacity = payload_groups * config.data_shards * shard_data_bytes;
     let max_payload_bytes = raw_payload_capacity.saturating_sub(PAYLOAD_LEN_SIZE);
 
     // Tile assignments start empty, filled by scatter_assign
@@ -450,8 +378,10 @@ fn compute_layout(config: &TiledConfig) -> Result<TiledLayout> {
         dead_y,
         group_size,
         n_groups,
+        payload_groups,
         active_tiles,
         shard_data_bytes,
+        control_data_bytes,
         max_payload_bytes,
         tile_assignments,
     })
@@ -618,6 +548,34 @@ fn rs_recover_group(
     Ok(recovered)
 }
 
+fn split_data_chunks(data: &[u8], data_shards: usize, shard_data_bytes: usize) -> Vec<Vec<u8>> {
+    let mut chunks = Vec::with_capacity(data_shards);
+    for shard_idx in 0..data_shards {
+        let chunk_offset = shard_idx * shard_data_bytes;
+        let mut chunk = vec![0u8; shard_data_bytes];
+        if chunk_offset < data.len() {
+            let chunk_end = (chunk_offset + shard_data_bytes).min(data.len());
+            let src = &data[chunk_offset..chunk_end];
+            chunk[..src.len()].copy_from_slice(src);
+        }
+        chunks.push(chunk);
+    }
+    chunks
+}
+
+fn assemble_group_shards(
+    data_chunks: &[Vec<u8>],
+    data_shards: usize,
+    parity_shards: usize,
+    shard_data_bytes: usize,
+) -> Result<Vec<Vec<u8>>> {
+    let parity_chunks = rs_encode_group(data_chunks, data_shards, parity_shards, shard_data_bytes)?;
+    let mut shards = Vec::with_capacity(data_shards + parity_shards);
+    shards.extend(data_chunks.iter().cloned());
+    shards.extend(parity_chunks);
+    Ok(shards)
+}
+
 // ── Encoder ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -641,7 +599,16 @@ impl TiledEncoder {
     }
 
     pub fn encode_payload(&self, master_key: &str, payload: &[u8]) -> Result<Vec<Grid<f32>>> {
-        let tile_payloads = self.build_tile_payloads(payload)?;
+        let header = TiledStreamBlockHeader {
+            version: TILED_STREAM_BLOCK_VERSION,
+            session_id: 0,
+            block_index: 0,
+            block_count: 1,
+            payload_len: u32::try_from(payload.len())
+                .map_err(|_| crate::Error::Codec("payload too large for tiled stream".into()))?,
+            payload_crc32: crc32(payload),
+        };
+        let tile_payloads = self.build_tile_payloads(payload, &header)?;
         let all_tile_frames = self.encode_tile_frames(master_key, &tile_payloads, false)?;
         Ok(self.compose_standalone_frames(master_key, &all_tile_frames))
     }
@@ -659,12 +626,25 @@ impl TiledEncoder {
             ));
         }
         validate_tiled_carrier_frames(carrier_frames, &self.config)?;
-        let tile_payloads = self.build_tile_payloads(payload)?;
+        let header = TiledStreamBlockHeader {
+            version: TILED_STREAM_BLOCK_VERSION,
+            session_id: 0,
+            block_index: 0,
+            block_count: 1,
+            payload_len: u32::try_from(payload.len())
+                .map_err(|_| crate::Error::Codec("payload too large for tiled stream".into()))?,
+            payload_crc32: crc32(payload),
+        };
+        let tile_payloads = self.build_tile_payloads(payload, &header)?;
         let all_tile_frames = self.encode_tile_frames(master_key, &tile_payloads, true)?;
         self.overlay_on_carrier_frames(&all_tile_frames, carrier_frames, clip_limit)
     }
 
-    fn build_tile_payloads(&self, payload: &[u8]) -> Result<Vec<Option<String>>> {
+    fn build_tile_payloads(
+        &self,
+        payload: &[u8],
+        header: &TiledStreamBlockHeader,
+    ) -> Result<Vec<Option<Vec<u8>>>> {
         let layout = &self.layout;
         if payload.len() > layout.max_payload_bytes {
             return Err(crate::Error::Codec(format!(
@@ -681,66 +661,52 @@ impl TiledEncoder {
         framed_payload.extend_from_slice(&logical_len.to_le_bytes());
         framed_payload.extend_from_slice(payload);
 
-        // Build per-tile QR payload strings
-        let mut tile_payloads: Vec<Option<String>> = vec![None; layout.total_tiles];
+        let mut group_shards: Vec<Vec<Vec<u8>>> = Vec::with_capacity(layout.n_groups);
 
-        for group_id in 0..layout.n_groups {
-            let group_offset = group_id * group_payload_size;
+        let control_chunks = split_data_chunks(
+            &encode_control_header(header),
+            self.config.data_shards,
+            layout.shard_data_bytes,
+        );
+        group_shards.push(assemble_group_shards(
+            &control_chunks,
+            self.config.data_shards,
+            self.config.parity_shards,
+            layout.shard_data_bytes,
+        )?);
+
+        for payload_group in 0..layout.payload_groups {
+            let group_offset = payload_group * group_payload_size;
             let group_end = (group_offset + group_payload_size).min(framed_payload.len());
             let group_data = if group_offset < framed_payload.len() {
                 &framed_payload[group_offset..group_end]
             } else {
                 &[]
             };
-
-            // Split into data chunks, padding with zeros
-            let mut data_chunks: Vec<Vec<u8>> = Vec::with_capacity(self.config.data_shards);
-            for shard_idx in 0..self.config.data_shards {
-                let chunk_offset = shard_idx * layout.shard_data_bytes;
-                let mut chunk = vec![0u8; layout.shard_data_bytes];
-                if chunk_offset < group_data.len() {
-                    let chunk_end = (chunk_offset + layout.shard_data_bytes).min(group_data.len());
-                    let src = &group_data[chunk_offset..chunk_end];
-                    chunk[..src.len()].copy_from_slice(src);
-                }
-                data_chunks.push(chunk);
-            }
-
-            // Compute parity chunks
-            let parity_chunks = rs_encode_group(
+            let data_chunks =
+                split_data_chunks(group_data, self.config.data_shards, layout.shard_data_bytes);
+            group_shards.push(assemble_group_shards(
                 &data_chunks,
                 self.config.data_shards,
                 self.config.parity_shards,
                 layout.shard_data_bytes,
-            )?;
-
-            // Assign payloads to tiles
-            for (tile_idx, assignment) in layout.tile_assignments.iter().enumerate() {
-                if let Some((gid, shard_idx)) = assignment {
-                    if *gid != group_id {
-                        continue;
-                    }
-                    let shard_data = if *shard_idx < self.config.data_shards {
-                        &data_chunks[*shard_idx]
-                    } else {
-                        &parity_chunks[*shard_idx - self.config.data_shards]
-                    };
-                    tile_payloads[tile_idx] = Some(encode_tile_payload(
-                        group_id as u16,
-                        *shard_idx as u8,
-                        shard_data,
-                    ));
-                }
-            }
+            )?);
         }
 
+        let mut tile_payloads: Vec<Option<Vec<u8>>> = vec![None; layout.total_tiles];
+        for (tile_idx, assignment) in layout.tile_assignments.iter().enumerate() {
+            if let Some((group_id, shard_idx)) = assignment {
+                tile_payloads[tile_idx] =
+                    Some(encode_tile_payload(&group_shards[*group_id][*shard_idx]));
+            }
+        }
         Ok(tile_payloads)
     }
 
     fn encode_tile_frames(
         &self,
         master_key: &str,
-        tile_payloads: &[Option<String>],
+        tile_payloads: &[Option<Vec<u8>>],
         signal_only: bool,
     ) -> Result<Vec<Option<Vec<Grid<f32>>>>> {
         let layout = &self.layout;
@@ -755,12 +721,13 @@ impl TiledEncoder {
         // Encode each active tile's frames
         let mut all_tile_frames: Vec<Option<Vec<Grid<f32>>>> = vec![None; layout.total_tiles];
         for (tile_idx, qr_payload) in tile_payloads.iter().enumerate() {
-            if let Some(payload_str) = qr_payload {
+            if let Some(payload_bytes) = qr_payload {
                 let tile_key = derive_tile_key(master_key, tile_idx);
+                let qr_grid = crate::qr::encode::encode_bytes(payload_bytes)?;
                 let frames = if signal_only {
-                    tile_encoder.encode_message_signal(&tile_key, payload_str)?
+                    tile_encoder.encode_qr_signal(&tile_key, &qr_grid)?
                 } else {
-                    tile_encoder.encode_message(&tile_key, payload_str)?
+                    tile_encoder.encode_qr(&tile_key, &qr_grid)?
                 };
                 all_tile_frames[tile_idx] = Some(frames);
             }
@@ -851,8 +818,9 @@ impl TiledEncoder {
         master_key: &str,
         block: &TiledStreamBlock,
     ) -> Result<Vec<Grid<f32>>> {
-        let encoded = block.encode()?;
-        self.encode_payload(master_key, &encoded)
+        let tile_payloads = self.build_tile_payloads(&block.payload, &block.header)?;
+        let all_tile_frames = self.encode_tile_frames(master_key, &tile_payloads, false)?;
+        Ok(self.compose_standalone_frames(master_key, &all_tile_frames))
     }
 
     pub fn encode_stream_block_over_carrier(
@@ -862,8 +830,15 @@ impl TiledEncoder {
         carrier_frames: &[Grid<f32>],
         clip_limit: f32,
     ) -> Result<Vec<Grid<f32>>> {
-        let encoded = block.encode()?;
-        self.encode_payload_over_carrier(master_key, &encoded, carrier_frames, clip_limit)
+        if clip_limit <= 0.0 {
+            return Err(crate::Error::Codec(
+                "clip_limit must be greater than zero".into(),
+            ));
+        }
+        validate_tiled_carrier_frames(carrier_frames, &self.config)?;
+        let tile_payloads = self.build_tile_payloads(&block.payload, &block.header)?;
+        let all_tile_frames = self.encode_tile_frames(master_key, &tile_payloads, true)?;
+        self.overlay_on_carrier_frames(&all_tile_frames, carrier_frames, clip_limit)
     }
 }
 
@@ -873,7 +848,7 @@ impl TiledEncoder {
 pub enum TileDecodeOutcome {
     Success {
         detector_score: f32,
-        message: String,
+        shard_recovered: bool,
     },
     Failed {
         detector_score: f32,
@@ -942,7 +917,7 @@ impl TiledDecoder {
         )?;
         let tile_decoder = TemporalDecoder::new(tile_config)?;
 
-        // Decode each active tile
+        // Decode each active tile.
         let mut tile_results = Vec::with_capacity(layout.total_tiles);
         // Collect decoded shards per group as unique shard slots.
         let mut group_shards: Vec<Vec<Option<Vec<u8>>>> =
@@ -977,28 +952,20 @@ impl TiledDecoder {
             let tile_key = derive_tile_key(master_key, tile_idx);
             match tile_decoder.decode_qr(&tile_frames, &tile_key, policy) {
                 Ok(decode_result) => {
-                    if let Some(ref message) = decode_result.message {
-                        // Parse tile payload
-                        if let Ok((group_id, shard_id, shard_data)) = decode_tile_payload(message) {
-                            let gid = group_id as usize;
-                            let sid = shard_id as usize;
-                            if gid < layout.n_groups
-                                && sid < layout.group_size
-                                && shard_data.len() == layout.shard_data_bytes
-                            {
-                                group_shards[gid][sid].get_or_insert(shard_data);
-                            }
-                        }
+                    let mut shard_recovered = false;
+                    if let Ok(raw_payload) = crate::qr::decode::decode_bytes(&decode_result.qr)
+                        && let Ok(shard_data) = decode_tile_payload(&raw_payload)
+                        && shard_data.len() == layout.shard_data_bytes
+                        && let Some((group_id, shard_id)) = layout.tile_assignments[tile_idx]
+                    {
+                        group_shards[group_id][shard_id].get_or_insert(shard_data);
+                        shard_recovered = true;
                         tiles_decoded += 1;
-                        tile_results.push(TileDecodeOutcome::Success {
-                            detector_score: decode_result.detector_score,
-                            message: message.clone(),
-                        });
-                    } else {
-                        tile_results.push(TileDecodeOutcome::Failed {
-                            detector_score: decode_result.detector_score,
-                        });
                     }
+                    tile_results.push(TileDecodeOutcome::Success {
+                        detector_score: decode_result.detector_score,
+                        shard_recovered,
+                    });
                 }
                 Err(_) => {
                     tile_results.push(TileDecodeOutcome::Failed {
@@ -1008,83 +975,150 @@ impl TiledDecoder {
             }
         }
 
-        // RS-recover each group
+        // Recover the reserved control group first.
         let mut group_results = Vec::with_capacity(layout.n_groups);
-        let mut all_recovered = true;
-        let mut payload_groups: Vec<Option<Vec<Vec<u8>>>> = vec![None; layout.n_groups];
+        let control_group = group_shards[0]
+            .iter()
+            .enumerate()
+            .filter_map(|(sid, data)| data.as_ref().map(|payload| (sid, payload.clone())))
+            .collect::<Vec<_>>();
+        let mut payload = None;
+        let mut stream_block = None;
 
-        for group_id in 0..layout.n_groups {
-            let shards: Vec<(usize, Vec<u8>)> = group_shards[group_id]
-                .iter()
-                .enumerate()
-                .filter_map(|(sid, data)| data.as_ref().map(|payload| (sid, payload.clone())))
-                .collect();
-            let shards_received = shards.len();
-            let shards_needed = self.config.data_shards;
-
-            if shards_received >= shards_needed {
-                match rs_recover_group(
-                    &shards,
-                    self.config.data_shards,
-                    self.config.parity_shards,
-                    layout.shard_data_bytes,
-                ) {
-                    Ok(recovered) => {
-                        group_results.push(GroupRecoveryOutcome {
-                            group_id,
-                            shards_received,
-                            shards_needed,
-                            recovered: true,
-                        });
-                        payload_groups[group_id] = Some(recovered);
+        let control_header = if control_group.len() >= self.config.data_shards {
+            match rs_recover_group(
+                &control_group,
+                self.config.data_shards,
+                self.config.parity_shards,
+                layout.shard_data_bytes,
+            ) {
+                Ok(recovered) => {
+                    group_results.push(GroupRecoveryOutcome {
+                        group_id: 0,
+                        shards_received: control_group.len(),
+                        shards_needed: self.config.data_shards,
+                        recovered: true,
+                    });
+                    let mut control_bytes = Vec::with_capacity(layout.control_data_bytes);
+                    for shard in recovered {
+                        control_bytes.extend_from_slice(&shard);
                     }
-                    Err(_) => {
-                        group_results.push(GroupRecoveryOutcome {
-                            group_id,
-                            shards_received,
-                            shards_needed,
-                            recovered: false,
-                        });
-                        all_recovered = false;
-                    }
+                    decode_control_header(&control_bytes).ok()
                 }
-            } else {
-                group_results.push(GroupRecoveryOutcome {
-                    group_id,
-                    shards_received,
-                    shards_needed,
-                    recovered: false,
-                });
-                all_recovered = false;
-            }
-        }
-
-        // Reassemble payload
-        let payload = if all_recovered {
-            let mut data = Vec::with_capacity(layout.max_payload_bytes);
-            for shards in payload_groups.iter().flatten() {
-                for shard in shards {
-                    data.extend_from_slice(shard);
-                }
-            }
-            if data.len() < PAYLOAD_LEN_SIZE {
-                None
-            } else {
-                let logical_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-                let available = data.len() - PAYLOAD_LEN_SIZE;
-                if logical_len > available {
+                Err(_) => {
+                    group_results.push(GroupRecoveryOutcome {
+                        group_id: 0,
+                        shards_received: control_group.len(),
+                        shards_needed: self.config.data_shards,
+                        recovered: false,
+                    });
                     None
-                } else {
-                    Some(data[PAYLOAD_LEN_SIZE..PAYLOAD_LEN_SIZE + logical_len].to_vec())
                 }
             }
         } else {
+            group_results.push(GroupRecoveryOutcome {
+                group_id: 0,
+                shards_received: control_group.len(),
+                shards_needed: self.config.data_shards,
+                recovered: false,
+            });
             None
         };
 
-        let stream_block = payload
-            .as_ref()
-            .and_then(|bytes| TiledStreamBlock::decode(bytes).ok());
+        if let Some(control_header) = control_header {
+            let mut all_recovered = true;
+            let mut payload_groups: Vec<Option<Vec<Vec<u8>>>> = vec![None; layout.payload_groups];
+
+            for group_id in 1..layout.n_groups {
+                let shards: Vec<(usize, Vec<u8>)> = group_shards[group_id]
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(sid, data)| data.as_ref().map(|payload| (sid, payload.clone())))
+                    .collect();
+                let shards_received = shards.len();
+                let shards_needed = self.config.data_shards;
+
+                if shards_received >= shards_needed {
+                    match rs_recover_group(
+                        &shards,
+                        self.config.data_shards,
+                        self.config.parity_shards,
+                        layout.shard_data_bytes,
+                    ) {
+                        Ok(recovered) => {
+                            group_results.push(GroupRecoveryOutcome {
+                                group_id,
+                                shards_received,
+                                shards_needed,
+                                recovered: true,
+                            });
+                            payload_groups[group_id - 1] = Some(recovered);
+                        }
+                        Err(_) => {
+                            group_results.push(GroupRecoveryOutcome {
+                                group_id,
+                                shards_received,
+                                shards_needed,
+                                recovered: false,
+                            });
+                            all_recovered = false;
+                        }
+                    }
+                } else {
+                    group_results.push(GroupRecoveryOutcome {
+                        group_id,
+                        shards_received,
+                        shards_needed,
+                        recovered: false,
+                    });
+                    all_recovered = false;
+                }
+            }
+
+            if all_recovered {
+                let mut data = Vec::with_capacity(layout.max_payload_bytes + PAYLOAD_LEN_SIZE);
+                for shards in payload_groups.iter().flatten() {
+                    for shard in shards {
+                        data.extend_from_slice(shard);
+                    }
+                }
+
+                if data.len() >= PAYLOAD_LEN_SIZE {
+                    let logical_len =
+                        u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+                    let available = data.len().saturating_sub(PAYLOAD_LEN_SIZE);
+                    if logical_len <= available {
+                        let recovered_payload =
+                            data[PAYLOAD_LEN_SIZE..PAYLOAD_LEN_SIZE + logical_len].to_vec();
+                        if crc32(&recovered_payload) == control_header.payload_crc32
+                            && control_header.payload_len as usize == recovered_payload.len()
+                        {
+                            let block = TiledStreamBlock {
+                                header: control_header,
+                                payload: recovered_payload.clone(),
+                            };
+                            if block.validate().is_ok() {
+                                payload = Some(recovered_payload);
+                                stream_block = Some(block);
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            for group_id in 1..layout.n_groups {
+                let shards_received = group_shards[group_id]
+                    .iter()
+                    .filter(|data| data.is_some())
+                    .count();
+                group_results.push(GroupRecoveryOutcome {
+                    group_id,
+                    shards_received,
+                    shards_needed: self.config.data_shards,
+                    recovered: false,
+                });
+            }
+        }
 
         Ok(TiledDecodeResult {
             tile_results,
@@ -1104,38 +1138,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn base64url_roundtrip() {
-        let data = b"hello world";
-        let encoded = base64url_encode(data);
-        assert_eq!(encoded, "aGVsbG8gd29ybGQ");
-        let decoded = base64url_decode(&encoded).unwrap();
-        assert_eq!(decoded, data);
-    }
-
-    #[test]
-    fn base64url_empty() {
-        assert_eq!(base64url_encode(&[]), "");
-        assert_eq!(base64url_decode("").unwrap(), Vec::<u8>::new());
-    }
-
-    #[test]
-    fn base64url_invalid_length_fails() {
-        assert!(base64url_decode("a").is_err());
-    }
-
-    #[test]
-    fn base64url_invalid_char_fails() {
-        assert!(base64url_decode("%A").is_err());
-    }
-
-    #[test]
     fn tile_payload_roundtrip() {
         let data = vec![0x42, 0x55, 0x99];
-        let encoded = encode_tile_payload(7, 2, &data);
-        let (group_id, shard_id, decoded) = decode_tile_payload(&encoded).unwrap();
-        assert_eq!(group_id, 7);
-        assert_eq!(shard_id, 2);
+        let encoded = encode_tile_payload(&data);
+        let decoded = decode_tile_payload(&encoded).unwrap();
         assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn control_header_roundtrip() {
+        let header = TiledStreamBlockHeader {
+            version: TILED_STREAM_BLOCK_VERSION,
+            session_id: 0x1122_3344_5566_7788,
+            block_index: 7,
+            block_count: 11,
+            payload_len: 123,
+            payload_crc32: 0xaabb_ccdd,
+        };
+        let encoded = encode_control_header(&header);
+        let decoded = decode_control_header(&encoded).unwrap();
+        assert_eq!(decoded, header);
     }
 
     #[test]
@@ -1168,9 +1190,11 @@ mod tests {
         assert_eq!(layout.dead_y, 5);
         assert_eq!(layout.group_size, 5);
         assert_eq!(layout.n_groups, 653);
+        assert_eq!(layout.payload_groups, 652);
         assert_eq!(layout.active_tiles, 3265);
-        assert_eq!(layout.shard_data_bytes, 5);
-        assert_eq!(layout.max_payload_bytes, 653 * 3 * 5 - PAYLOAD_LEN_SIZE); // 9791
+        assert_eq!(layout.shard_data_bytes, 12);
+        assert_eq!(layout.control_data_bytes, 36);
+        assert_eq!(layout.max_payload_bytes, 652 * 3 * 12 - PAYLOAD_LEN_SIZE);
     }
 
     #[test]
@@ -1183,14 +1207,16 @@ mod tests {
         assert_eq!(layout.total_tiles, 16);
         assert_eq!(layout.group_size, 3);
         assert_eq!(layout.n_groups, 5);
+        assert_eq!(layout.payload_groups, 4);
         assert_eq!(layout.active_tiles, 15);
-        assert_eq!(layout.shard_data_bytes, 5); // base64url: 5-byte header + 5-byte shard = 10 raw => 14 chars
-        assert_eq!(layout.max_payload_bytes, 5 * 2 * 5 - PAYLOAD_LEN_SIZE);
+        assert_eq!(layout.shard_data_bytes, 12);
+        assert_eq!(layout.control_data_bytes, 24);
+        assert_eq!(layout.max_payload_bytes, 4 * 2 * 12 - PAYLOAD_LEN_SIZE);
     }
 
     #[test]
     fn v1_too_small_for_tiling() {
-        // QR v1 has only 7 bytes capacity → shard_data_bytes = 0 → should fail
+        // QR v1 cannot carry the reserved control header across the data shards.
         let result = TiledConfig::new((100, 100), 1, 64, 0.42, 0.22, 2, 1);
         assert!(result.is_err());
     }
@@ -1272,11 +1298,10 @@ mod tests {
 
     #[test]
     fn tile_payload_crc_rejects_corruption() {
-        let encoded = encode_tile_payload(7, 2, b"hello");
-        let mut corrupted = encoded.into_bytes();
+        let encoded = encode_tile_payload(b"hello");
+        let mut corrupted = encoded;
         let last = corrupted.len() - 1;
-        corrupted[last] = if corrupted[last] == b'A' { b'B' } else { b'A' };
-        let corrupted = String::from_utf8(corrupted).unwrap();
+        corrupted[last] ^= 0x01;
         assert!(decode_tile_payload(&corrupted).is_err());
     }
 
@@ -1284,7 +1309,7 @@ mod tests {
     fn small_encode_decode_roundtrip() {
         // 75x75 video, QR v2 (25x25) = 3x3 = 9 tiles
         // RS: 2 data + 1 parity = 3 per group → 3 groups
-        // shard_data_bytes = 5 with base64url tile payloads and CRC16 headers
+        // shard_data_bytes = 12 with raw tile payloads and CRC16 headers
         // Use proven temporal baseline: 64 frames, 0.42/0.22 amplitudes
         let config = TiledConfig::new((75, 75), 2, 64, 0.42, 0.22, 2, 1).unwrap();
         let master_key = "test-tiled";
@@ -1294,7 +1319,8 @@ mod tests {
         assert_eq!(layout.tiles_x, 3);
         assert_eq!(layout.tiles_y, 3);
         assert_eq!(layout.n_groups, 3);
-        assert_eq!(layout.shard_data_bytes, 5);
+        assert_eq!(layout.payload_groups, 2);
+        assert_eq!(layout.shard_data_bytes, 12);
 
         // Create a payload that fits
         let payload: Vec<u8> = (0..layout.max_payload_bytes)

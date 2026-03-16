@@ -55,7 +55,7 @@ pub(crate) fn extract_qr_from_sign_grid(sign_grid: &Grid<u8>) -> Option<Grid<u8>
             continue;
         }
         let candidate = centered_qr_crop(sign_grid, size).ok()?;
-        if qr::decode::decode(&candidate).is_ok() {
+        if qr::decode::decode_bytes(&candidate).is_ok() {
             return Some(candidate);
         }
     }

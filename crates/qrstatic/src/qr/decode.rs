@@ -12,11 +12,7 @@ use super::format;
 use super::mask;
 use super::reed_solomon;
 
-/// Decode a QR code from a grid of modules (0=white, 1=black).
-///
-/// The grid must be a valid QR code size (21, 25, 29, 33, 37, or 41).
-/// Handles up to 30% module errors via EC level H Reed-Solomon correction.
-pub fn decode(grid: &Grid<u8>) -> Result<String> {
+fn decode_impl(grid: &Grid<u8>) -> Result<Vec<u8>> {
     let size = grid.width();
     if grid.height() != size {
         return Err(Error::QrDecode("grid must be square".into()));
@@ -60,6 +56,23 @@ pub fn decode(grid: &Grid<u8>) -> Result<String> {
 
     // Step 9: Parse byte-mode data
     parse_byte_mode(&all_data)
+}
+
+/// Decode a QR code from a grid of modules (0=white, 1=black) into raw bytes.
+///
+/// The grid must be a valid QR code size (21, 25, 29, 33, 37, or 41).
+/// Handles up to 30% module errors via EC level H Reed-Solomon correction.
+pub fn decode_bytes(grid: &Grid<u8>) -> Result<Vec<u8>> {
+    decode_impl(grid)
+}
+
+/// Decode a QR code from a grid of modules (0=white, 1=black).
+///
+/// The grid must be a valid QR code size (21, 25, 29, 33, 37, or 41).
+/// Handles up to 30% module errors via EC level H Reed-Solomon correction.
+pub fn decode(grid: &Grid<u8>) -> Result<String> {
+    let bytes = decode_impl(grid)?;
+    String::from_utf8(bytes).map_err(|e| Error::QrDecode(format!("invalid UTF-8: {e}")))
 }
 
 /// Read format info from the grid (try both copies).
@@ -198,7 +211,7 @@ fn deinterleave(
 }
 
 /// Parse byte-mode encoded data.
-fn parse_byte_mode(data: &[u8]) -> Result<String> {
+fn parse_byte_mode(data: &[u8]) -> Result<Vec<u8>> {
     if data.is_empty() {
         return Err(Error::QrDecode("empty data".into()));
     }
@@ -241,7 +254,7 @@ fn parse_byte_mode(data: &[u8]) -> Result<String> {
         result.push(byte);
     }
 
-    String::from_utf8(result).map_err(|e| Error::QrDecode(format!("invalid UTF-8: {e}")))
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -267,6 +280,14 @@ mod tests {
         let grid = encode::encode("Hello, World!").unwrap();
         let decoded = decode(&grid).unwrap();
         assert_eq!(decoded, "Hello, World!");
+    }
+
+    #[test]
+    fn roundtrip_raw_bytes() {
+        let bytes = vec![0x00, 0x7f, 0x80, 0xfe, 0xff];
+        let grid = encode::encode_bytes(&bytes).unwrap();
+        let decoded = decode_bytes(&grid).unwrap();
+        assert_eq!(decoded, bytes);
     }
 
     #[test]
