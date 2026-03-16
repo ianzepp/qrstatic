@@ -378,7 +378,30 @@ The current implementation now reflects an explicit thresholded decode policy in
 
 That is the correct direction.
 
-However, the current threshold should still be treated as provisional until it is calibrated from broader eval data. The important invariant is not the specific numeric threshold value; the important invariant is that decode acceptance is controlled by a detector policy grounded in measured wrong-key and wrong-window response distributions.
+However, the current threshold should still be treated as profile-specific policy, not a timeless constant. The important invariant is not the specific numeric threshold value; the important invariant is that decode acceptance is controlled by a detector policy grounded in measured wrong-key and wrong-window response distributions.
+
+Current Stage 1 calibration status:
+
+- the working baseline profile is `middle-64-a`
+- baseline parameters are `frames = 64`, `noise_amplitude = 0.42`, `l1_amplitude = 0.22`
+- the current working threshold is `6.0`
+- this profile was chosen to reduce early visual emergence while preserving strong full-window decode reliability
+
+Measured on a `128`-trial prefix sweep with `--prefix-step 4`:
+
+- full-window decode was `100%`
+- wrong-key, wrong-window, and naive-path decode were all `0%`
+- no correct decodes occurred through `44/64` frames
+- correct decode reached `12.5%` at `48/64`
+- correct decode reached `100%` at `52/64`
+- `k50 = 52`
+- `k95 = 52`
+
+That is the current "Goldilocks" Stage 1 target:
+
+- mostly latent through the first two thirds of the window
+- weak emergence late in the window
+- reliable keyed decode before the final few frames
 
 ## Packet and FEC Layer
 
@@ -587,6 +610,13 @@ The production implementation should not be accepted until the following are mea
 - QR decode success rate is high across representative trials
 - correct-key detector response is well separated from the distribution of random wrong-key responses
 - decode acceptance is controlled by an explicit detector threshold, not only by whether QR decode happened to succeed
+- prefix acquisition should remain subdued early and then rise sharply near the intended window end
+
+Current Stage 1 acquisition target for the working baseline:
+
+- no clean decode through roughly `44/64`
+- only weak emergence around `48/64`
+- near-certain decode by `52/64`
 
 ### Wrong-Key Rejection
 
@@ -644,14 +674,30 @@ Implemented now:
 - thresholded decode policy
 - debug viewer targeting `temporal`
 - CLI eval runner for repeated wrong-key / wrong-window / naive-path measurements
+- CLI prefix-acquisition instrumentation via `--prefix-step`
+- a tuned working baseline profile, `middle-64-a`, for later-emerging Layer 1 reveal
 
 Not implemented yet:
 
-- calibrated threshold selection from larger sweeps
 - packet layer
 - Layer 2 embedding
 - residual subtraction and Layer 2 decode
 - synchronization search beyond fixed known windows
+
+Current working baseline:
+
+- profile: `middle-64-a`
+- frame size: `41x41`
+- window: `64`
+- noise amplitude: `0.42`
+- Layer 1 amplitude: `0.22`
+- threshold: `6.0`
+
+Current eval workflow:
+
+- append sweep rows to a local untracked TSV such as `temporal_results.tsv`
+- use full-window score separation to bound safe thresholds
+- use prefix sweeps to tune acquisition timing rather than only terminal decode rate
 
 ### Stage 2: Packet Layer
 

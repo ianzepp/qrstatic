@@ -101,8 +101,8 @@ assert_eq!(decoded, "hello from qrstatic");
 ```rust
 use qrstatic::codec::temporal::*;
 
-// Configure
-let config = TemporalConfig::new((41, 41), 64, 0.5, 0.35)?;
+// Configure the current Stage 1 baseline profile.
+let config = TemporalConfig::new((41, 41), 64, 0.42, 0.22)?;
 
 // Encode
 let encoder = TemporalEncoder::new(config.clone())?;
@@ -110,11 +110,20 @@ let frames = encoder.encode_message("master-key", "hello from temporal")?;
 
 // Decode
 let decoder = TemporalDecoder::new(config)?;
-let policy = TemporalDecodePolicy::fixed_threshold(0.1)?;
+let policy = TemporalDecodePolicy::fixed_threshold(6.0)?;
 let result = decoder.decode_qr(&frames, "master-key", &policy)?;
 assert_eq!(result.message.as_deref(), Some("hello from temporal"));
 # Ok::<(), qrstatic::Error>(())
 ```
+
+The current working Stage 1 baseline is a later-emerging profile:
+
+- `frames = 64`
+- `noise_amplitude = 0.42`
+- `l1_amplitude = 0.22`
+- `threshold = 6.0`
+
+In the current prefix calibration runs, that profile stays undecodable through `44/64` frames, begins to emerge around `48/64`, and reaches reliable keyed decode by `52/64`.
 
 ### CLI
 
@@ -131,6 +140,11 @@ cargo run -p qrstatic-cli --bin qrstatic -- decode binary --in /tmp/hello.qrsb
 
 # Temporal eval runner
 cargo run -p qrstatic-cli --bin qrstatic-temporal-eval
+
+# Prefix acquisition probe for the current baseline
+cargo run -p qrstatic-cli --bin qrstatic-temporal-eval -- \
+  --trials 128 \
+  --prefix-step 4
 ```
 
 ### Installation

@@ -8,6 +8,7 @@ use qrstatic::codec::temporal::{
     TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, detector_score,
     naive_field, try_extract_qr,
 };
+use qrstatic::qr;
 use qrstatic::Grid;
 
 fn main() -> ExitCode {
@@ -49,6 +50,7 @@ struct EvalArgs {
     noise_amplitude: f32,
     l1_amplitude: f32,
     threshold: f32,
+    prefix_step: Option<usize>,
     key_prefix: String,
     qr_prefix: String,
     results_tsv: Option<PathBuf>,
@@ -57,14 +59,15 @@ struct EvalArgs {
 impl EvalArgs {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut parsed = Self {
-            profile: "stage1-default".into(),
+            profile: "middle-64-a".into(),
             trials: 32,
             width: 41,
             height: 41,
             frames: 64,
-            noise_amplitude: 0.3,
-            l1_amplitude: 0.35,
+            noise_amplitude: 0.42,
+            l1_amplitude: 0.22,
             threshold: 6.0,
+            prefix_step: None,
             key_prefix: "temporal-eval".into(),
             qr_prefix: "temporal-bootstrap".into(),
             results_tsv: None,
@@ -89,6 +92,10 @@ impl EvalArgs {
                     parsed.threshold =
                         parse_f32(&next_value(&mut args, "--threshold")?, "--threshold")?
                 }
+                "--prefix-step" => {
+                    parsed.prefix_step =
+                        Some(parse_usize(&next_value(&mut args, "--prefix-step")?, "--prefix-step")?)
+                }
                 "--key-prefix" => parsed.key_prefix = next_value(&mut args, "--key-prefix")?,
                 "--qr-prefix" => parsed.qr_prefix = next_value(&mut args, "--qr-prefix")?,
                 "--results-tsv" => {
@@ -102,6 +109,9 @@ impl EvalArgs {
 
         if parsed.trials == 0 {
             return Err("--trials must be greater than zero".into());
+        }
+        if matches!(parsed.prefix_step, Some(0)) {
+            return Err("--prefix-step must be greater than zero".into());
         }
 
         Ok(parsed)
@@ -118,6 +128,18 @@ struct EvalSummary {
     wrong_key_scores: Vec<f32>,
     wrong_window_scores: Vec<f32>,
     naive_scores: Vec<f32>,
+    prefix_summaries: Vec<PrefixSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PrefixSummary {
+    prefix_frames: usize,
+    correct_decode_successes: usize,
+    wrong_key_decode_successes: usize,
+    wrong_window_decode_successes: usize,
+    correct_scores: Vec<f32>,
+    wrong_key_scores: Vec<f32>,
+    wrong_window_scores: Vec<f32>,
 }
 
 fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
@@ -142,6 +164,7 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
         wrong_key_scores: Vec::with_capacity(args.trials),
         wrong_window_scores: Vec::with_capacity(args.trials),
         naive_scores: Vec::with_capacity(args.trials),
+        prefix_summaries: build_prefix_summaries(args),
     };
 
     for trial in 0..args.trials {
@@ -206,9 +229,93 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
                     .map_err(|err| format!("trial {trial}: failed to score naive path: {err}"))?,
             ),
         );
+
+        for prefix_summary in &mut summary.prefix_summaries {
+            let prefix_len = prefix_summary.prefix_frames;
+            let correct_prefix = &frames[..prefix_len];
+            let wrong_window_prefix = &wrong_window[..prefix_len];
+
+            let correct_correlation = decoder
+                .correlate_prefix(correct_prefix, &master_key)
+                .map_err(|err| format!("trial {trial}: failed to score correct prefix: {err}"))?;
+            prefix_summary
+                .correct_scores
+                .push(correct_correlation.detector_score);
+            if prefix_decode_matches(&correct_correlation.field, &qr_payload)
+                && correct_correlation.detector_score >= args.threshold
+            {
+                prefix_summary.correct_decode_successes += 1;
+            }
+
+            let wrong_key_correlation = decoder
+                .correlate_prefix(correct_prefix, &wrong_key)
+                .map_err(|err| format!("trial {trial}: failed to score wrong-key prefix: {err}"))?;
+            prefix_summary
+                .wrong_key_scores
+                .push(wrong_key_correlation.detector_score);
+            if wrong_key_correlation.detector_score >= args.threshold
+                && prefix_extracts_any_qr(&wrong_key_correlation.field)
+            {
+                prefix_summary.wrong_key_decode_successes += 1;
+            }
+
+            let wrong_window_correlation = decoder
+                .correlate_prefix(wrong_window_prefix, &master_key)
+                .map_err(|err| format!("trial {trial}: failed to score wrong-window prefix: {err}"))?;
+            prefix_summary
+                .wrong_window_scores
+                .push(wrong_window_correlation.detector_score);
+            if wrong_window_correlation.detector_score >= args.threshold
+                && prefix_extracts_any_qr(&wrong_window_correlation.field)
+            {
+                prefix_summary.wrong_window_decode_successes += 1;
+            }
+        }
     }
 
     Ok(summary)
+}
+
+fn build_prefix_summaries(args: &EvalArgs) -> Vec<PrefixSummary> {
+    let Some(step) = args.prefix_step else {
+        return Vec::new();
+    };
+
+    let mut prefix_frames = Vec::new();
+    let mut next = step.min(args.frames);
+    while next < args.frames {
+        prefix_frames.push(next);
+        next += step;
+    }
+    if prefix_frames.last().copied() != Some(args.frames) {
+        prefix_frames.push(args.frames);
+    }
+
+    prefix_frames
+        .into_iter()
+        .map(|prefix_frames| PrefixSummary {
+            prefix_frames,
+            correct_decode_successes: 0,
+            wrong_key_decode_successes: 0,
+            wrong_window_decode_successes: 0,
+            correct_scores: Vec::with_capacity(args.trials),
+            wrong_key_scores: Vec::with_capacity(args.trials),
+            wrong_window_scores: Vec::with_capacity(args.trials),
+        })
+        .collect()
+}
+
+fn prefix_decode_matches(field: &Grid<f32>, expected_payload: &str) -> bool {
+    try_extract_qr(field)
+        .and_then(|qr_grid| qr::decode::decode(&qr_grid).ok())
+        .as_deref()
+        == Some(expected_payload)
+}
+
+fn prefix_extracts_any_qr(field: &Grid<f32>) -> bool {
+    try_extract_qr(field)
+        .and_then(|qr_grid| qr::decode::decode(&qr_grid).ok())
+        .is_some()
 }
 
 fn make_wrong_window(frames: &[Grid<f32>], other_frames: &[Grid<f32>]) -> Vec<Grid<f32>> {
@@ -277,6 +384,41 @@ fn print_summary(args: &EvalArgs, summary: &EvalSummary) {
         &summary.wrong_window_scores,
     );
     print_margin_row("correct - naive_sum   ", &summary.correct_scores, &summary.naive_scores);
+
+    if !summary.prefix_summaries.is_empty() {
+        println!();
+        println!("prefix acquisition:");
+        for prefix_summary in &summary.prefix_summaries {
+            let correct_stats = ScoreStats::from_values(&prefix_summary.correct_scores);
+            let wrong_key_stats = ScoreStats::from_values(&prefix_summary.wrong_key_scores);
+            let wrong_window_stats = ScoreStats::from_values(&prefix_summary.wrong_window_scores);
+            println!(
+                "  prefix={:>3}/{:<3} correct={:>6.2}% wrong_key={:>6.2}% wrong_window={:>6.2}% scores(correct/wrong/window)={:.3}/{:.3}/{:.3}",
+                prefix_summary.prefix_frames,
+                args.frames,
+                percent(prefix_summary.correct_decode_successes, args.trials),
+                percent(prefix_summary.wrong_key_decode_successes, args.trials),
+                percent(prefix_summary.wrong_window_decode_successes, args.trials),
+                correct_stats.mean,
+                wrong_key_stats.mean,
+                wrong_window_stats.mean,
+            );
+        }
+
+        if let Some(k50) = prefix_threshold_frame(&summary.prefix_summaries, args.trials, 50.0) {
+            println!("  k50={k50}");
+        }
+        if let Some(k95) = prefix_threshold_frame(&summary.prefix_summaries, args.trials, 95.0) {
+            println!("  k95={k95}");
+        }
+    }
+}
+
+fn prefix_threshold_frame(prefix_summaries: &[PrefixSummary], trials: usize, target_pct: f32) -> Option<usize> {
+    prefix_summaries
+        .iter()
+        .find(|prefix_summary| percent(prefix_summary.correct_decode_successes, trials) >= target_pct)
+        .map(|prefix_summary| prefix_summary.prefix_frames)
 }
 
 fn print_score_row(label: &str, values: &[f32]) {
@@ -433,6 +575,7 @@ fn help_text() -> String {
         "    --noise-amplitude <float>",
         "    --l1-amplitude <float>",
         "    --threshold <float>",
+        "    --prefix-step <count>",
         "    --key-prefix <text>",
         "    --qr-prefix <text>",
         "    --results-tsv <path>",
