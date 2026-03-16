@@ -1,0 +1,16 @@
+[package]
+name = "qrstatic-debug-macos"
+version = "0.1.0"
+edition = "2024"
+description = "macOS debug viewer for qrstatic binary accumulation"
+license = "MIT"
+repository = "https://github.com/ianzepp/qrstatic"
+publish = false
+
+[[bin]]
+name = "qrstatic-debug-macos"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = true }
+qrstatic = { path = "../qrstatic" }

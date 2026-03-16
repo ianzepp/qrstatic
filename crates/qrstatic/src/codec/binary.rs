@@ -72,19 +72,21 @@ impl BinaryEncoder {
 
     pub fn encode_qr(&self, qr_grid: &Grid<u8>, payload: &[u8]) -> Result<Vec<Grid<i8>>> {
         let qr_in_frame = embed_qr_in_frame(qr_grid, self.frame_shape)?;
+        let permutation = cell_permutation(self.frame_shape);
         let bias_map = build_bias_map(
             &qr_in_frame,
             payload,
             self.base_bias,
             self.payload_bias_delta,
         );
+        let physical_bias_map = permute_grid(&bias_map, &permutation);
 
         let mut frames = Vec::with_capacity(self.config.n_frames);
         for frame_index in 0..self.config.n_frames {
             let frame_seed = frame_seed(&self.config.seed, frame_index as u64);
             frames.push(sample_binary_frame(
                 self.frame_shape,
-                &bias_map,
+                &physical_bias_map,
                 &frame_seed,
             ));
         }
@@ -111,7 +113,8 @@ impl BinaryDecoder {
 
     pub fn decode_qr(frames: &[Grid<i8>]) -> Result<Grid<u8>> {
         let accumulated = accumulate_binary_checked(frames)?;
-        extract_qr(&accumulated).ok_or_else(|| {
+        let logical = normalize_binary_accumulation(&accumulated);
+        extract_qr(&logical).ok_or_else(|| {
             Error::Codec("could not extract a valid QR crop from binary frame".into())
         })
     }
@@ -160,8 +163,9 @@ impl BinaryDecoder {
 
     pub fn decode_message(&self, frames: &[Grid<i8>]) -> Result<BinaryDecodeResult> {
         let accumulated = accumulate_binary_checked(frames)?;
-        let sign_grid = accumulated.map(|&value| u8::from(value < 0));
-        let Some(qr_grid) = extract_qr(&accumulated) else {
+        let logical = normalize_binary_accumulation(&accumulated);
+        let sign_grid = logical.map(|&value| u8::from(value < 0));
+        let Some(qr_grid) = extract_qr(&logical) else {
             return Ok(BinaryDecodeResult {
                 qr: sign_grid,
                 message: None,
@@ -172,7 +176,7 @@ impl BinaryDecoder {
         let message = qr::decode::decode(&qr_grid).ok();
         let payload = match &message {
             Some(qr_key) => Some(self.decode_payload(
-                &accumulated,
+                &logical,
                 qr_key,
                 frames.len(),
                 self.expected_payload_len,
@@ -376,6 +380,13 @@ fn random_binary_noise(frame_shape: (usize, usize), seed: &str) -> Grid<i8> {
     Grid::from_vec(data, frame_shape.0, frame_shape.1)
 }
 
+/// Undo the binary codec's fixed spatial scrambling so accumulated output can
+/// be interpreted in logical QR layout.
+pub fn normalize_binary_accumulation(accumulated: &Grid<i16>) -> Grid<i16> {
+    let permutation = cell_permutation((accumulated.width(), accumulated.height()));
+    unpermute_grid(accumulated, &permutation)
+}
+
 fn build_bias_map(
     qr_in_frame: &Grid<u8>,
     payload: &[u8],
@@ -419,6 +430,40 @@ fn modulate_bias(base: f32, bit: u8, delta: f32) -> f32 {
     }
 }
 
+fn cell_permutation(frame_shape: (usize, usize)) -> Vec<usize> {
+    let len = frame_shape.0 * frame_shape.1;
+    let mut permutation: Vec<usize> = (0..len).collect();
+    let mut rng = Prng::from_str_seed(&format!(
+        "qrstatic-binary-permutation:{}x{}",
+        frame_shape.0, frame_shape.1
+    ));
+
+    for idx in (1..len).rev() {
+        let swap_idx = (rng.next_u64() as usize) % (idx + 1);
+        permutation.swap(idx, swap_idx);
+    }
+
+    permutation
+}
+
+fn permute_grid<T: Clone>(grid: &Grid<T>, permutation: &[usize]) -> Grid<T> {
+    assert_eq!(grid.len(), permutation.len(), "permutation length mismatch");
+    let mut data = vec![grid.data()[0].clone(); grid.len()];
+    for (logical_idx, &physical_idx) in permutation.iter().enumerate() {
+        data[physical_idx] = grid.data()[logical_idx].clone();
+    }
+    Grid::from_vec(data, grid.width(), grid.height())
+}
+
+fn unpermute_grid<T: Clone>(grid: &Grid<T>, permutation: &[usize]) -> Grid<T> {
+    assert_eq!(grid.len(), permutation.len(), "permutation length mismatch");
+    let mut data = vec![grid.data()[0].clone(); grid.len()];
+    for (logical_idx, &physical_idx) in permutation.iter().enumerate() {
+        data[logical_idx] = grid.data()[physical_idx].clone();
+    }
+    Grid::from_vec(data, grid.width(), grid.height())
+}
+
 fn extract_qr(accumulated: &Grid<i16>) -> Option<Grid<u8>> {
     let sign_grid = accumulated.map(|&value| u8::from(value < 0));
     extract_qr_from_sign_grid(&sign_grid)
@@ -453,5 +498,22 @@ mod tests {
     #[test]
     fn decode_qr_rejects_empty_input() {
         assert!(BinaryDecoder::decode_qr(&[]).is_err());
+    }
+
+    #[test]
+    fn effective_bias_dilutes_single_frame_leakage() {
+        let permutation = cell_permutation((41, 41));
+        let mut sorted = permutation.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..(41 * 41)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn normalize_accumulation_inverts_permutation() {
+        let logical = Grid::from_vec((0..9).collect::<Vec<_>>(), 3, 3);
+        let permutation = cell_permutation((3, 3));
+        let physical = permute_grid(&logical, &permutation);
+        let restored = unpermute_grid(&physical, &permutation);
+        assert_eq!(restored, logical);
     }
 }
