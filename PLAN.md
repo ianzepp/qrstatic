@@ -7,7 +7,8 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 
 - Phase 1 is complete.
 - Phase 2 is complete and validated with `cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` (109 passing tests as of 2026-03-15).
-- Phase 3 is the next implementation target.
+- Phase 3 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` with 118 passing tests as of 2026-03-15).
+- Phase 4 is the next implementation target.
 
 ## Architecture
 
@@ -92,6 +93,13 @@ Validation notes:
 ### Phase 3 — XOR Codec (First End-to-End Validation)
 
 The simplest encoding approach. Validates the entire pipeline: string → QR → frames → decode → QR → string.
+
+Status: complete.
+
+Validation notes:
+- Batch XOR encode/decode is implemented for full QR roundtrips.
+- Streaming XOR encode/decode supports queued messages and cycle-by-cycle decoding.
+- Partial-frame and pure-random-frame cases are covered and do not yield valid decoded messages.
 
 **Files:**
 - `src/codec/mod.rs` — `Frame` enum (`Binary(Grid<u8>)`, `Signed(Grid<i8>)`, `Analog(Grid<f32>)`). Shared `EncodeConfig` and `DecodeResult` types.
