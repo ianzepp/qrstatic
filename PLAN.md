@@ -3,6 +3,12 @@
 Zero-dependency Rust crate for steganographic QR codes hidden in accumulated noise frames.
 Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Python).
 
+## Current Status
+
+- Phase 1 is complete.
+- Phase 2 is complete and validated with `cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` (109 passing tests as of 2026-03-15).
+- Phase 3 is the next implementation target.
+
 ## Architecture
 
 ```
@@ -57,6 +63,13 @@ Build the zero-dep infrastructure that everything else depends on.
 
 Hand-rolled QR encoder and decoder. Byte mode only, EC level H, versions 1-6.
 The decoder only handles our own programmatic output (known grid, no camera/image processing).
+
+Status: complete.
+
+Validation notes:
+- Byte-mode count indicator is 8 bits for all supported versions (1-6).
+- Version selection now matches QR-H byte capacities for versions 1-6: 7, 14, 24, 34, 44, 58 bytes.
+- Version 6 block structure uses 4 blocks × 15 data codewords with 28 EC codewords per block.
 
 **Files:**
 - `src/qr/gf256.rs` — GF(256) with primitive polynomial 0x11d. `mul`, `div`, `pow`, `log`/`exp` tables. Generator polynomial computation.

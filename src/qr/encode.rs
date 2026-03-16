@@ -82,10 +82,10 @@ const VERSIONS: [VersionInfo; 6] = [
         version: 6,
         size: 41,
         ec_per_block: 28,
-        blocks_g1: 2,
+        blocks_g1: 4,
         data_per_block_g1: 15,
-        blocks_g2: 2,
-        data_per_block_g2: 16,
+        blocks_g2: 0,
+        data_per_block_g2: 0,
     },
 ];
 
@@ -99,17 +99,13 @@ const ALIGNMENT_POSITIONS: [&[usize]; 6] = [
     &[6, 34], // v6
 ];
 
-/// Determine the character count indicator bit width based on data capacity.
-/// Versions 1-2 (capacity ≤ 16) use 4 bits; versions 3+ use 8 bits.
-pub fn count_bits_for_capacity(capacity: usize) -> usize {
-    if capacity <= 16 { 4 } else { 8 }
-}
+/// Byte mode uses an 8-bit character count indicator for QR versions 1-9.
+pub const BYTE_MODE_COUNT_BITS: usize = 8;
 
 fn select_version(data_len: usize) -> Result<&'static VersionInfo> {
     for v in &VERSIONS {
         let capacity = v.total_data_codewords();
-        let count_bits = count_bits_for_capacity(capacity);
-        let header_bits = 4 + count_bits; // mode indicator (4) + character count
+        let header_bits = 4 + BYTE_MODE_COUNT_BITS; // mode indicator (4) + character count
         let data_bits = data_len * 8;
         let total_bits = header_bits + data_bits;
         let total_bytes = total_bits.div_ceil(8);
@@ -129,10 +125,9 @@ fn encode_data_bits(data: &[u8], capacity: usize) -> Vec<u8> {
     // Mode indicator: 0100 (byte mode)
     bits.extend_from_slice(&[false, true, false, false]);
 
-    // Character count: width depends on version (capacity)
-    let count_bits = count_bits_for_capacity(capacity);
+    // Character count: byte mode uses 8 bits for all supported versions (1-6).
     let count = data.len() as u8;
-    for i in (0..count_bits).rev() {
+    for i in (0..BYTE_MODE_COUNT_BITS).rev() {
         bits.push((count >> i) & 1 == 1);
     }
 
@@ -410,14 +405,23 @@ mod tests {
     }
 
     #[test]
-    fn select_version_medium() {
-        let v = select_version(15).unwrap();
-        assert!(v.version >= 2);
+    fn select_version_boundaries_match_qr_h_capacity() {
+        assert_eq!(select_version(7).unwrap().version, 1);
+        assert_eq!(select_version(8).unwrap().version, 2);
+        assert_eq!(select_version(14).unwrap().version, 2);
+        assert_eq!(select_version(15).unwrap().version, 3);
+        assert_eq!(select_version(24).unwrap().version, 3);
+        assert_eq!(select_version(25).unwrap().version, 4);
+        assert_eq!(select_version(34).unwrap().version, 4);
+        assert_eq!(select_version(35).unwrap().version, 5);
+        assert_eq!(select_version(44).unwrap().version, 5);
+        assert_eq!(select_version(45).unwrap().version, 6);
+        assert_eq!(select_version(58).unwrap().version, 6);
     }
 
     #[test]
     fn select_version_too_large() {
-        assert!(select_version(100).is_err());
+        assert!(select_version(59).is_err());
     }
 
     #[test]
@@ -429,7 +433,8 @@ mod tests {
     #[test]
     fn encode_data_bits_starts_with_mode() {
         let bytes = encode_data_bits(b"A", 9);
-        assert_eq!(bytes[0], 0x41);
+        assert_eq!(bytes[0], 0x40);
+        assert_eq!(bytes[1], 0x14);
     }
 
     #[test]
@@ -475,8 +480,16 @@ mod tests {
 
     #[test]
     fn version_2_has_alignment() {
-        let grid = encode("ABCDEFGHIJKLMNO").unwrap();
+        let grid = encode("ABCDEFGHIJKLMN").unwrap();
         assert_eq!(grid.width(), 25);
+    }
+
+    #[test]
+    fn version_6_max_payload_roundtrip_size() {
+        let data = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345";
+        assert_eq!(data.len(), 58);
+        let grid = encode(data).unwrap();
+        assert_eq!(grid.width(), 41);
     }
 
     #[test]

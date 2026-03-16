@@ -284,8 +284,8 @@ mod tests {
         let ec = encode(data, n_ec);
         let mut received = data.to_vec();
         received.extend_from_slice(&ec);
-        for i in 0..5 {
-            received[i] ^= 0xFF;
+        for byte in received.iter_mut().take(5) {
+            *byte ^= 0xFF;
         }
         assert!(decode(&received, n_ec).is_none());
     }

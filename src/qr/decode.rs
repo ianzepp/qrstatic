@@ -59,7 +59,7 @@ pub fn decode(grid: &Grid<u8>) -> Result<String> {
     let all_data: Vec<u8> = decoded_data.into_iter().flatten().collect();
 
     // Step 9: Parse byte-mode data
-    parse_byte_mode(&all_data, version.total_data_codewords())
+    parse_byte_mode(&all_data)
 }
 
 /// Read format info from the grid (try both copies).
@@ -198,7 +198,7 @@ fn deinterleave(
 }
 
 /// Parse byte-mode encoded data.
-fn parse_byte_mode(data: &[u8], capacity: usize) -> Result<String> {
+fn parse_byte_mode(data: &[u8]) -> Result<String> {
     if data.is_empty() {
         return Err(Error::QrDecode("empty data".into()));
     }
@@ -209,17 +209,13 @@ fn parse_byte_mode(data: &[u8], capacity: usize) -> Result<String> {
         return Err(Error::QrDecode(format!("unsupported mode {mode:#x}")));
     }
 
-    // Character count bit width depends on version (capacity)
-    let count_bits = encode::count_bits_for_capacity(capacity);
-    let header_bits = 4 + count_bits;
+    let header_bits = 4 + encode::BYTE_MODE_COUNT_BITS;
 
     // Read character count
-    let count = if count_bits == 4 {
-        (data[0] & 0x0F) as usize
-    } else {
-        // 8-bit count: bits 4..12
-        (((data[0] & 0x0F) as usize) << 4) | ((data[1] >> 4) as usize)
+    let Some(&second_byte) = data.get(1) else {
+        return Err(Error::QrDecode("truncated byte-mode header".into()));
     };
+    let count = (((data[0] & 0x0F) as usize) << 4) | ((second_byte >> 4) as usize);
 
     // Read data bytes
     let mut result = Vec::with_capacity(count);
@@ -229,18 +225,17 @@ fn parse_byte_mode(data: &[u8], capacity: usize) -> Result<String> {
         let bit_pos = bit_offset % 8;
 
         if byte_idx >= data.len() {
-            break;
+            return Err(Error::QrDecode("truncated byte-mode payload".into()));
         }
 
         let byte = if bit_pos == 0 {
             data[byte_idx]
         } else {
             let hi = data[byte_idx] << bit_pos;
-            let lo = if byte_idx + 1 < data.len() {
-                data[byte_idx + 1] >> (8 - bit_pos)
-            } else {
-                0
+            let Some(&next_byte) = data.get(byte_idx + 1) else {
+                return Err(Error::QrDecode("truncated byte-mode payload".into()));
             };
+            let lo = next_byte >> (8 - bit_pos);
             hi | lo
         };
         result.push(byte);
@@ -276,9 +271,18 @@ mod tests {
 
     #[test]
     fn roundtrip_version_2() {
-        let data = "ABCDEFGHIJKLMNO"; // Needs version 2
+        let data = "ABCDEFGHIJKLMN"; // 14 bytes = version 2 maximum at EC-H
         let grid = encode::encode(data).unwrap();
         assert_eq!(grid.width(), 25);
+        let decoded = decode(&grid).unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn roundtrip_version_3_boundary() {
+        let data = "ABCDEFGHIJKLMNO"; // 15 bytes requires version 3 at EC-H
+        let grid = encode::encode(data).unwrap();
+        assert_eq!(grid.width(), 29);
         let decoded = decode(&grid).unwrap();
         assert_eq!(decoded, data);
     }
