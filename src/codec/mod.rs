@@ -2,6 +2,7 @@ use crate::Grid;
 
 pub(crate) mod common;
 pub mod analog;
+pub mod audio;
 pub mod binary;
 pub mod layered;
 pub mod signed;

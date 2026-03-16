@@ -13,7 +13,8 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 - Phase 6 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
 - Phase 7 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
 - Phase 8 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
-- Phase 9 is the next implementation target.
+- Phase 9 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
+- Phase 10 is the next implementation target.
 
 ## Architecture
 
@@ -228,6 +229,14 @@ Validation notes:
 ### Phase 9 — Audio Codec
 
 Maps audio samples to virtual 2D frames via sign biasing.
+
+Status: complete.
+
+Validation notes:
+- Audio samples are mapped into a virtual square frame via `sample_index % frame_size`.
+- QR content is embedded by probabilistic sign flipping toward the target module polarity.
+- Decoding accumulates `n_frames * frame_size` samples into a virtual 2D field and recovers QR from sign.
+- Synthetic-sample roundtrips, multiple frame sizes, and streaming sample/chunk decode are covered.
 
 **Files:**
 - `src/codec/audio.rs` — `AudioEncoder`: bias audio sample signs toward QR pattern. Each sample maps to a QR module via `sample_index % frame_size`. `AudioDecoder`: accumulate N frames worth of samples, reshape to 2D, extract QR from accumulated sign. Streaming wrappers.
