@@ -2,7 +2,7 @@
 name = "qrstatic-debug-macos"
 version = "0.1.0"
 edition = "2024"
-description = "macOS debug viewer for qrstatic binary accumulation"
+description = "macOS debug viewer for qrstatic temporal correlation"
 license = "MIT"
 repository = "https://github.com/ianzepp/qrstatic"
 publish = false

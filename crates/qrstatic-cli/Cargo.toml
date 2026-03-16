@@ -11,5 +11,9 @@ publish = false
 name = "qrstatic"
 path = "src/main.rs"
 
+[[bin]]
+name = "qrstatic-temporal-eval"
+path = "src/temporal_eval.rs"
+
 [dependencies]
 qrstatic = { path = "../qrstatic" }

@@ -12,6 +12,7 @@ pub(crate) mod common;
 pub mod layered;
 pub mod signed;
 pub mod sliding;
+pub mod temporal;
 pub mod xor;
 
 /// A carrier frame for one of the supported codec families.

@@ -30,6 +30,8 @@ pub use codec::layered::LayeredDecodeResult;
 pub use codec::signed::SignedDecodeResult;
 /// Common sliding codec decode output.
 pub use codec::sliding::SlidingDecodeResult;
+/// Common temporal codec decode output.
+pub use codec::temporal::TemporalDecodeResult;
 /// Shared codec carrier and result types.
 pub use codec::{DecodeResult, EncodeConfig, Frame};
 /// Error and result aliases used across the crate.

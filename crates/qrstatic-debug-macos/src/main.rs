@@ -5,19 +5,17 @@ use eframe::egui::{
     self, Align, Color32, ColorImage, Context, Grid as UiGrid, RichText, TextureHandle,
     TextureOptions, Vec2,
 };
-use qrstatic::codec::analog::{AnalogDecoder, AnalogEncoder};
+use qrstatic::codec::temporal::{TemporalConfig, TemporalDecoder, TemporalEncoder};
 use qrstatic::{Grid, qr};
 
 const DEFAULT_WIDTH: usize = 41;
 const DEFAULT_HEIGHT: usize = 41;
-const DEFAULT_FRAMES: usize = 60;
+const DEFAULT_FRAMES: usize = 64;
 const DEFAULT_NOISE_AMPLITUDE: f32 = 0.3;
-const DEFAULT_SIGNAL_STRENGTH: f32 = 0.5;
-const DEFAULT_PAYLOAD_DELTA: f32 = 0.1;
+const DEFAULT_L1_AMPLITUDE: f32 = 0.35;
 const DEFAULT_FPS: f32 = 12.0;
-const DEFAULT_SEED: &str = "qrstatic-debug";
-const DEFAULT_QR_KEY: &str = "debug-window";
-const DEFAULT_PAYLOAD_TEXT: &str = "tracking tests";
+const DEFAULT_MASTER_KEY: &str = "qrstatic-debug";
+const DEFAULT_QR_PAYLOAD: &str = "temporal-bootstrap";
 
 fn main() -> eframe::Result<()> {
     let args = Args::parse(env::args().skip(1)).map_err(eframe_error)?;
@@ -54,39 +52,33 @@ impl std::error::Error for SimpleError {}
 
 #[derive(Debug, Clone)]
 struct Args {
-    qr_key: String,
-    payload_text: String,
+    master_key: String,
+    qr_payload: String,
     width: usize,
     height: usize,
     n_frames: usize,
-    seed: String,
     noise_amplitude: f32,
-    signal_strength: f32,
-    payload_delta: f32,
+    l1_amplitude: f32,
     fps: f32,
 }
 
 impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut parsed = Self {
-            qr_key: DEFAULT_QR_KEY.to_string(),
-            payload_text: DEFAULT_PAYLOAD_TEXT.to_string(),
+            master_key: DEFAULT_MASTER_KEY.to_string(),
+            qr_payload: DEFAULT_QR_PAYLOAD.to_string(),
             width: DEFAULT_WIDTH,
             height: DEFAULT_HEIGHT,
             n_frames: DEFAULT_FRAMES,
-            seed: DEFAULT_SEED.to_string(),
             noise_amplitude: DEFAULT_NOISE_AMPLITUDE,
-            signal_strength: DEFAULT_SIGNAL_STRENGTH,
-            payload_delta: DEFAULT_PAYLOAD_DELTA,
+            l1_amplitude: DEFAULT_L1_AMPLITUDE,
             fps: DEFAULT_FPS,
         };
 
         while let Some(flag) = args.next() {
             match flag.as_str() {
-                "--qr-key" => parsed.qr_key = next_value(&mut args, "--qr-key")?,
-                "--payload-text" => {
-                    parsed.payload_text = next_value(&mut args, "--payload-text")?
-                }
+                "--master-key" => parsed.master_key = next_value(&mut args, "--master-key")?,
+                "--qr-payload" => parsed.qr_payload = next_value(&mut args, "--qr-payload")?,
                 "--width" => {
                     parsed.width = parse_usize(&next_value(&mut args, "--width")?, "--width")?
                 }
@@ -96,23 +88,16 @@ impl Args {
                 "--frames" => {
                     parsed.n_frames = parse_usize(&next_value(&mut args, "--frames")?, "--frames")?
                 }
-                "--seed" => parsed.seed = next_value(&mut args, "--seed")?,
                 "--noise-amplitude" => {
                     parsed.noise_amplitude = parse_f32(
                         &next_value(&mut args, "--noise-amplitude")?,
                         "--noise-amplitude",
                     )?
                 }
-                "--signal-strength" => {
-                    parsed.signal_strength = parse_f32(
-                        &next_value(&mut args, "--signal-strength")?,
-                        "--signal-strength",
-                    )?
-                }
-                "--payload-delta" => {
-                    parsed.payload_delta = parse_f32(
-                        &next_value(&mut args, "--payload-delta")?,
-                        "--payload-delta",
+                "--l1-amplitude" => {
+                    parsed.l1_amplitude = parse_f32(
+                        &next_value(&mut args, "--l1-amplitude")?,
+                        "--l1-amplitude",
                     )?
                 }
                 "--fps" => parsed.fps = parse_f32(&next_value(&mut args, "--fps")?, "--fps")?,
@@ -128,8 +113,8 @@ impl Args {
             return Err("--fps must be greater than zero".into());
         }
 
-        let qr_grid = qr::encode::encode(&parsed.qr_key)
-            .map_err(|err| format!("failed to encode qr-key for sizing: {err}"))?;
+        let qr_grid = qr::encode::encode(&parsed.qr_payload)
+            .map_err(|err| format!("failed to encode qr-payload for sizing: {err}"))?;
         if parsed.width < qr_grid.width() || parsed.height < qr_grid.height() {
             return Err(format!(
                 "frame size {}x{} is smaller than the QR size {}x{} required for the current key",
@@ -151,16 +136,17 @@ fn help_text() -> String {
         "USAGE:",
         "    cargo run -p qrstatic-debug-macos -- [options]",
         "",
+        "TEMPORAL ONLY:",
+        "    This viewer renders the fixed-window Layer 1 temporal codec.",
+        "",
         "OPTIONS:",
-        "    --qr-key <text>",
-        "    --payload-text <text>",
+        "    --master-key <text>",
+        "    --qr-payload <text>",
         "    --width <cells>",
         "    --height <cells>",
         "    --frames <count>",
-        "    --seed <text>",
         "    --noise-amplitude <float>",
-        "    --signal-strength <float>",
-        "    --payload-delta <float>",
+        "    --l1-amplitude <float>",
         "    --fps <float>",
     ]
     .join("\n")
@@ -186,7 +172,8 @@ fn parse_f32(value: &str, flag: &str) -> Result<f32, String> {
 struct DebugViewerApp {
     config: ViewerConfig,
     frames: Vec<Grid<f32>>,
-    accumulator: Grid<f32>,
+    naive_accumulator: Grid<f32>,
+    correlation_field: Grid<f32>,
     frame_index: usize,
     loop_count: usize,
     last_tick: Instant,
@@ -194,65 +181,65 @@ struct DebugViewerApp {
     is_playing: bool,
     stats: StatsSnapshot,
     static_texture: Option<TextureHandle>,
-    accumulation_texture: Option<TextureHandle>,
+    correlation_texture: Option<TextureHandle>,
 }
 
 #[derive(Debug, Clone)]
 struct ViewerConfig {
-    qr_key: String,
-    payload_text: String,
-    seed: String,
+    master_key: String,
+    qr_payload: String,
     width: usize,
     height: usize,
     n_frames: usize,
     noise_amplitude: f32,
-    signal_strength: f32,
-    payload_delta: f32,
+    l1_amplitude: f32,
 }
 
 #[derive(Debug, Clone)]
 struct StatsSnapshot {
     display_frame: usize,
     loop_count: usize,
-    accum_min: f32,
-    accum_max: f32,
-    mean_abs: f32,
+    naive_min: f32,
+    naive_max: f32,
+    naive_mean_abs: f32,
+    corr_min: f32,
+    corr_max: f32,
+    corr_mean_abs: f32,
     decoded_message: Option<String>,
-    payload_ok: Option<bool>,
+    naive_qr_visible: bool,
+    detector_score: Option<f32>,
 }
 
 impl DebugViewerApp {
     fn new(args: Args) -> Result<Self, String> {
-        let encoder = AnalogEncoder::new(
-            args.n_frames,
+        let config = TemporalConfig::new(
             (args.width, args.height),
+            args.n_frames,
             args.noise_amplitude,
-            args.signal_strength,
-            args.payload_delta,
+            args.l1_amplitude,
         )
-        .map_err(|err| format!("failed to construct analog encoder: {err}"))?;
-
-        let payload_bytes = args.payload_text.as_bytes().to_vec();
+        .map_err(|err| format!("failed to construct temporal config: {err}"))?;
+        let encoder =
+            TemporalEncoder::new(config.clone()).map_err(|err| format!("failed to construct temporal encoder: {err}"))?;
         let frames = encoder
-            .encode_message(&args.qr_key, &payload_bytes)
-            .map_err(|err| format!("failed to generate analog debug frames: {err}"))?;
+            .encode_message(&args.master_key, &args.qr_payload)
+            .map_err(|err| format!("failed to generate temporal debug frames: {err}"))?;
 
-        let config = ViewerConfig {
-            qr_key: args.qr_key,
-            payload_text: args.payload_text,
-            seed: args.seed,
+        let viewer_config = ViewerConfig {
+            master_key: args.master_key,
+            qr_payload: args.qr_payload,
             width: args.width,
             height: args.height,
             n_frames: args.n_frames,
             noise_amplitude: args.noise_amplitude,
-            signal_strength: args.signal_strength,
-            payload_delta: args.payload_delta,
+            l1_amplitude: args.l1_amplitude,
         };
 
         Ok(Self {
-            config,
+            config: viewer_config,
             frames,
-            accumulator: Grid::new(args.width, args.height),
+            naive_accumulator: Grid::new(args.width, args.height),
+            correlation_field: Grid::new(args.width, args.height),
             frame_index: 0,
             loop_count: 0,
             last_tick: Instant::now(),
@@ -261,14 +248,18 @@ impl DebugViewerApp {
             stats: StatsSnapshot {
                 display_frame: 0,
                 loop_count: 0,
-                accum_min: 0.0,
-                accum_max: 0.0,
-                mean_abs: 0.0,
+                naive_min: 0.0,
+                naive_max: 0.0,
+                naive_mean_abs: 0.0,
+                corr_min: 0.0,
+                corr_max: 0.0,
+                corr_mean_abs: 0.0,
                 decoded_message: None,
-                payload_ok: None,
+                naive_qr_visible: false,
+                detector_score: None,
             },
             static_texture: None,
-            accumulation_texture: None,
+            correlation_texture: None,
         })
     }
 
@@ -276,12 +267,13 @@ impl DebugViewerApp {
         if self.frame_index == self.frames.len() {
             self.frame_index = 0;
             self.loop_count += 1;
-            self.accumulator = Grid::new(self.config.width, self.config.height);
+            self.naive_accumulator = Grid::new(self.config.width, self.config.height);
+            self.correlation_field = Grid::new(self.config.width, self.config.height);
         }
 
         let frame = &self.frames[self.frame_index];
         for (sum, &cell) in self
-            .accumulator
+            .naive_accumulator
             .data_mut()
             .iter_mut()
             .zip(frame.data().iter())
@@ -290,9 +282,14 @@ impl DebugViewerApp {
         }
 
         self.frame_index += 1;
+        self.correlation_field =
+            compute_correlation_prefix(&self.config, &self.frames[..self.frame_index]).unwrap_or_else(
+                |_| Grid::new(self.config.width, self.config.height),
+            );
         self.stats = compute_stats(
             &self.config,
-            &self.accumulator,
+            &self.naive_accumulator,
+            &self.correlation_field,
             &self.frames[..self.frame_index],
             self.frame_index,
             self.loop_count,
@@ -306,7 +303,10 @@ impl DebugViewerApp {
 
     fn update_textures(&mut self, ctx: &Context) {
         let static_image = render_static_image(self.current_frame(), self.config.noise_amplitude);
-        let accumulation_image = render_accumulation_image(&self.accumulator);
+        let correlation_image = render_field_image(
+            &self.correlation_field,
+            self.config.l1_amplitude * self.config.n_frames as f32,
+        );
 
         if let Some(texture) = &mut self.static_texture {
             texture.set(static_image, TextureOptions::NEAREST);
@@ -315,12 +315,12 @@ impl DebugViewerApp {
                 Some(ctx.load_texture("static-frame", static_image, TextureOptions::NEAREST));
         }
 
-        if let Some(texture) = &mut self.accumulation_texture {
-            texture.set(accumulation_image, TextureOptions::NEAREST);
+        if let Some(texture) = &mut self.correlation_texture {
+            texture.set(correlation_image, TextureOptions::NEAREST);
         } else {
-            self.accumulation_texture = Some(ctx.load_texture(
-                "accumulation-frame",
-                accumulation_image,
+            self.correlation_texture = Some(ctx.load_texture(
+                "correlation-frame",
+                correlation_image,
                 TextureOptions::NEAREST,
             ));
         }
@@ -356,7 +356,7 @@ impl eframe::App for DebugViewerApp {
                 draw_stats(ui, &self.config, &self.stats, &mut self.is_playing);
                 ui.add_space(8.0);
 
-                if let Some(texture) = &self.accumulation_texture {
+                if let Some(texture) = &self.correlation_texture {
                     ui.add(egui::Image::new(texture).fit_to_exact_size(pane_size));
                 }
             });
@@ -371,7 +371,7 @@ fn draw_stats(
     is_playing: &mut bool,
 ) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Accumulation Stats").strong());
+        ui.label(RichText::new("Temporal Stats").strong());
         let label = if *is_playing { "Pause" } else { "Play" };
         if ui.button(label).clicked() {
             *is_playing = !*is_playing;
@@ -387,33 +387,40 @@ fn draw_stats(
             stat_row(ui, "loop", &stats.loop_count.to_string());
             stat_row(
                 ui,
-                "accum",
-                &format!("{:.2} .. {:.2}", stats.accum_min, stats.accum_max),
+                "naive",
+                &format!("{:.2} .. {:.2}", stats.naive_min, stats.naive_max),
             );
-            stat_row(ui, "mean|x|", &format!("{:.2}", stats.mean_abs));
+            stat_row(ui, "naive |x|", &format!("{:.2}", stats.naive_mean_abs));
+            stat_row(
+                ui,
+                "corr",
+                &format!("{:.2} .. {:.2}", stats.corr_min, stats.corr_max),
+            );
+            stat_row(ui, "corr |x|", &format!("{:.2}", stats.corr_mean_abs));
             stat_row(
                 ui,
                 "decode",
                 stats.decoded_message.as_deref().unwrap_or("none"),
             );
-            stat_row(ui, "qr-key", &config.qr_key);
+            stat_row(ui, "master", &config.master_key);
+            stat_row(ui, "qr", &config.qr_payload);
             stat_row(
                 ui,
-                "payload",
-                match stats.payload_ok {
-                    Some(true) => "match",
-                    Some(false) => "mismatch",
-                    None => "pending",
-                },
+                "naive qr",
+                if stats.naive_qr_visible { "visible" } else { "none" },
             );
-            stat_row(ui, "seed", &config.seed);
             stat_row(
                 ui,
-                "analog",
-                &format!(
-                    "{:.2} / {:.2} / {:.2}",
-                    config.noise_amplitude, config.signal_strength, config.payload_delta
-                ),
+                "detector",
+                &stats
+                    .detector_score
+                    .map(|score| format!("{score:.2}"))
+                    .unwrap_or_else(|| "pending".to_string()),
+            );
+            stat_row(
+                ui,
+                "temporal",
+                &format!("{:.2} / {:.2}", config.noise_amplitude, config.l1_amplitude),
             );
         });
 }
@@ -428,50 +435,95 @@ fn stat_row(ui: &mut egui::Ui, label: &str, value: &str) {
 
 fn compute_stats(
     config: &ViewerConfig,
-    accumulator: &Grid<f32>,
+    naive_accumulator: &Grid<f32>,
+    correlation_field: &Grid<f32>,
     frames: &[Grid<f32>],
     display_frame: usize,
     loop_count: usize,
 ) -> StatsSnapshot {
-    let accum_min = accumulator
+    let naive_min = naive_accumulator
         .data()
         .iter()
         .copied()
         .min_by(f32::total_cmp)
         .unwrap_or(0.0);
-    let accum_max = accumulator
+    let naive_max = naive_accumulator
         .data()
         .iter()
         .copied()
         .max_by(f32::total_cmp)
         .unwrap_or(0.0);
-    let mean_abs = if accumulator.is_empty() {
+    let naive_mean_abs = if naive_accumulator.is_empty() {
         0.0
     } else {
-        accumulator.data().iter().map(|value| value.abs()).sum::<f32>() / accumulator.len() as f32
+        naive_accumulator
+            .data()
+            .iter()
+            .map(|value| value.abs())
+            .sum::<f32>()
+            / naive_accumulator.len() as f32
+    };
+    let corr_min = correlation_field
+        .data()
+        .iter()
+        .copied()
+        .min_by(f32::total_cmp)
+        .unwrap_or(0.0);
+    let corr_max = correlation_field
+        .data()
+        .iter()
+        .copied()
+        .max_by(f32::total_cmp)
+        .unwrap_or(0.0);
+    let corr_mean_abs = if correlation_field.is_empty() {
+        0.0
+    } else {
+        correlation_field
+            .data()
+            .iter()
+            .map(|value| value.abs())
+            .sum::<f32>()
+            / correlation_field.len() as f32
     };
 
-    let decoder = AnalogDecoder::new(
-        config.payload_text.len(),
+    let temporal_config = TemporalConfig::new(
+        (config.width, config.height),
+        config.n_frames,
         config.noise_amplitude,
-        config.signal_strength,
+        config.l1_amplitude,
     )
     .ok();
-    let decoded = decoder.and_then(|decoder| decoder.decode_message(frames).ok());
-    let decoded_message = decoded.as_ref().and_then(|result| result.message.clone());
-    let payload_ok = decoded
+    let decoder = temporal_config
+        .and_then(|cfg| TemporalDecoder::new(cfg).ok());
+    let decoded = decoder
         .as_ref()
-        .and_then(|result| result.payload.as_ref())
-        .map(|payload| payload == config.payload_text.as_bytes());
+        .and_then(|decoder| {
+            if frames.len() == config.n_frames {
+                decoder.decode_qr(frames, &config.master_key).ok()
+            } else {
+                None
+            }
+        });
+    let naive_qr_visible = decoder
+        .as_ref()
+        .and_then(|decoder| decoder.naive_decode_qr(frames).ok())
+        .flatten()
+        .is_some();
+    let decoded_message = decoded.as_ref().and_then(|result| result.message.clone());
+    let detector_score = decoded.as_ref().map(|result| result.detector_score);
 
     StatsSnapshot {
         display_frame,
         loop_count,
-        accum_min,
-        accum_max,
-        mean_abs,
+        naive_min,
+        naive_max,
+        naive_mean_abs,
+        corr_min,
+        corr_max,
+        corr_mean_abs,
         decoded_message,
-        payload_ok,
+        naive_qr_visible,
+        detector_score,
     }
 }
 
@@ -487,23 +539,32 @@ fn render_static_image(frame: &Grid<f32>, noise_amplitude: f32) -> ColorImage {
     }
 }
 
-fn render_accumulation_image(accumulator: &Grid<f32>) -> ColorImage {
-    let dynamic_range = accumulator
-        .data()
-        .iter()
-        .map(|value| value.abs())
-        .fold(0.0, f32::max)
-        .max(1e-6);
-
-    let pixels: Vec<Color32> = accumulator
+fn render_field_image(field: &Grid<f32>, fixed_range: f32) -> ColorImage {
+    let dynamic_range = fixed_range.max(1e-6);
+    let pixels: Vec<Color32> = field
         .data()
         .iter()
         .map(|&value| Color32::from_gray(map_symmetric_to_u8(value, dynamic_range)))
         .collect();
     ColorImage {
-        size: [accumulator.width(), accumulator.height()],
+        size: [field.width(), field.height()],
         pixels,
     }
+}
+
+fn compute_correlation_prefix(config: &ViewerConfig, frames: &[Grid<f32>]) -> Result<Grid<f32>, String> {
+    let temporal_config = TemporalConfig::new(
+        (config.width, config.height),
+        config.n_frames,
+        config.noise_amplitude,
+        config.l1_amplitude,
+    )
+    .map_err(|err| format!("failed to construct temporal config: {err}"))?;
+    let decoder =
+        TemporalDecoder::new(temporal_config).map_err(|err| format!("failed to construct temporal decoder: {err}"))?;
+    decoder
+        .correlate_prefix(frames, &config.master_key)
+        .map_err(|err| format!("failed to correlate temporal prefix: {err}"))
 }
 
 fn map_symmetric_to_u8(value: f32, amplitude: f32) -> u8 {
