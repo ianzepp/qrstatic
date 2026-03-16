@@ -222,9 +222,16 @@ Initial geometry sweeps compared:
 
 Representative results:
 
-- `638x464 @ v3`: `22x16`, `350` active tiles, `13` shard bytes, `2726` max payload bytes
-- `640x480 @ v3`: same active tile count, but dead region `2x16`
-- `660x495 @ v4`: `20x15`, `300` active tiles, `20` shard bytes, `3596` max payload bytes
+- current `638x464 @ v3`: `22x16`, `350` active tiles, `22` shard bytes, `4550` max payload bytes
+- current `640x480 @ v3`: same active tile count and capacity, but dead region `2x16`
+- current `660x495 @ v4`: `20x15`, `300` active tiles, `32` shard bytes, `5660` max payload bytes
+
+For comparison, the pre-refactor tiled transport had materially lower payload density:
+
+- earlier `638x464 @ v3`: `13` shard bytes, `2726` max payload bytes
+- earlier `660x495 @ v4`: `20` shard bytes, `3596` max payload bytes
+
+So the geometry story stayed the same, but the payload budget improved substantially.
 
 All three were perfect at the original high-strength overlay settings, so geometry alone was not the decision surface.
 
@@ -232,6 +239,7 @@ Decision impact:
 
 - `638x464 @ v3` was the clean exact-fit comparison baseline
 - `660x495 @ v4` became the throughput candidate because it preserved exact fit while materially increasing capacity
+- after the transport refactor, that throughput advantage became substantially larger because raw byte QR payloads removed the earlier text-encoding overhead
 
 ### Phase B: carrier-overlay artifact sweep
 
@@ -248,16 +256,13 @@ That led to the follow-up amplitude sweep.
 
 For `638x464 @ v3`:
 
-- `l1=0.06`: `3/4` block success, PSNR `30.63 dB`
-- `l1=0.07`: `6/6` block success, PSNR `28.83 dB`
-- `l1=0.09`: `6/6` block success, PSNR `26.65 dB`
-- `l1=0.11`: `6/6` block success, PSNR `24.61 dB`
+- earlier `l1=0.06`: `3/4` block success, PSNR `30.63 dB`
+- current `l1=0.07`: `4/4` block success, mean tiles decoded `349.00 / 350`, PSNR `28.83 dB`
 
 For `660x495 @ v4`:
 
-- `l1=0.07`: `6/6` block success, slight tile loss, PSNR `28.61 dB`
-- `l1=0.09`: `6/6` block success, full tile/group recovery, PSNR `26.29 dB`
-- `l1=0.11`: `6/6` block success, full tile/group recovery, PSNR `25.04 dB`
+- current `l1=0.22`: `4/4` block success, full tile/group recovery, PSNR `19.02 dB`
+- current `l1=0.09`: `6/6` block success, full tile/group recovery, PSNR `26.29 dB`
 
 Decision impact:
 
@@ -282,12 +287,12 @@ Working profile:
 
 Quantization results:
 
-- `q128`: `8/8` block success, quantization delta `0.003937`, PSNR `26.88 dB`
-- `q64`: `8/8` block success, quantization delta `0.007933`, PSNR `26.90 dB`
-- `q32`: `4/4` block success, quantization delta `0.016123`, PSNR `26.71 dB`
-- `q16`: `4/4` block success, quantization delta `0.033189`, PSNR `26.44 dB`
-- `q8`: `4/4` block success, slight tile loss (`299.75 / 300`), quantization delta `0.070652`, PSNR `24.46 dB`
-- `q4`: `0/4` block success, tiles decoded `177.75 / 300`, groups recovered `38.25 / 60`, PSNR `19.38 dB`
+- earlier `q128`: `8/8` block success, quantization delta `0.003937`, PSNR `26.88 dB`
+- earlier `q64`: `8/8` block success, quantization delta `0.007933`, PSNR `26.90 dB`
+- earlier `q32`: `4/4` block success, quantization delta `0.016123`, PSNR `26.71 dB`
+- current `q16`: `4/4` block success, quantization delta `0.033184`, PSNR `26.44 dB`
+- current `q8`: `4/4` block success, slight tile loss (`299.75 / 300`), quantization delta `0.070645`, PSNR `24.46 dB`
+- current `q4`: `0/4` block success, tiles decoded `178.50 / 300`, groups recovered `38.00 / 60`, PSNR `19.38 dB`
 
 Decision impact:
 
@@ -344,6 +349,8 @@ Reason:
 - acceptable artifact pressure compared to the earlier `0.22` setting
 - clean block recovery on the sampled overlay runs
 - robust to quantization down through at least `q16`, and still functional at `q8`
+- after the transport refactor, materially higher usable payload density than the earlier tiled implementation while keeping the same measured recovery behavior in spot re-runs
+- current measured layout: `300` active tiles, `32` shard bytes, `5660` max payload bytes
 
 ## Acceptable Values Right Now
 
@@ -367,12 +374,14 @@ Good throughput-oriented working profile:
 - `660x495 @ v4`
 - `l1_amplitude=0.09`
 - `threshold=2.5`
+- current measured layout after the transport refactor: `300` active tiles, `32` shard bytes, `5660` max payload bytes
 
 Gentler concealment-oriented fallback:
 
 - `638x464 @ v3`
 - `l1_amplitude=0.07`
 - `threshold=1.9`
+- current measured layout: `350` active tiles, `22` shard bytes, `4550` max payload bytes
 
 Likely too aggressive:
 

@@ -1106,11 +1106,13 @@ impl TiledDecoder {
                 }
             }
         } else {
-            for group_id in 1..layout.n_groups {
-                let shards_received = group_shards[group_id]
-                    .iter()
-                    .filter(|data| data.is_some())
-                    .count();
+            for (group_id, shard_slots) in group_shards
+                .iter()
+                .enumerate()
+                .take(layout.n_groups)
+                .skip(1)
+            {
+                let shards_received = shard_slots.iter().filter(|data| data.is_some()).count();
                 group_results.push(GroupRecoveryOutcome {
                     group_id,
                     shards_received,
