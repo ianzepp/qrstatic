@@ -1,8 +1,15 @@
-use qrstatic::codec::temporal::{TemporalConfig, TemporalDecoder, TemporalEncoder};
+use qrstatic::codec::temporal::{
+    TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, detector_score,
+    naive_field, try_extract_qr,
+};
 use qrstatic::qr;
 
 fn test_config() -> TemporalConfig {
     TemporalConfig::new((41, 41), 64, 0.5, 0.35).unwrap()
+}
+
+fn test_policy() -> TemporalDecodePolicy {
+    TemporalDecodePolicy::fixed_threshold(6.0).unwrap()
 }
 
 #[test]
@@ -10,11 +17,12 @@ fn keyed_correlation_recovers_layer1_qr_message() {
     let config = test_config();
     let encoder = TemporalEncoder::new(config.clone()).unwrap();
     let decoder = TemporalDecoder::new(config).unwrap();
+    let policy = test_policy();
 
     let frames = encoder
         .encode_message("temporal-master", "temporal-visible")
         .unwrap();
-    let decoded = decoder.decode_qr(&frames, "temporal-master").unwrap();
+    let decoded = decoder.decode_qr(&frames, "temporal-master", &policy).unwrap();
 
     assert_eq!(decoded.message.as_deref(), Some("temporal-visible"));
     assert!(decoded.detector_score > 1.0);
@@ -25,11 +33,12 @@ fn wrong_key_fails_closed() {
     let config = test_config();
     let encoder = TemporalEncoder::new(config.clone()).unwrap();
     let decoder = TemporalDecoder::new(config).unwrap();
+    let policy = test_policy();
 
     let frames = encoder
         .encode_message("correct-master", "visible-bootstrap")
         .unwrap();
-    let wrong = decoder.decode_qr(&frames, "wrong-master");
+    let wrong = decoder.decode_qr(&frames, "wrong-master", &policy);
 
     assert!(wrong.is_err());
 }
@@ -39,6 +48,7 @@ fn wrong_window_fails_closed() {
     let config = test_config();
     let encoder = TemporalEncoder::new(config.clone()).unwrap();
     let decoder = TemporalDecoder::new(config).unwrap();
+    let policy = test_policy();
 
     let frames_a = encoder.encode_message("window-master", "window-qr").unwrap();
     let frames_b = encoder.encode_message("other-master", "other-qr").unwrap();
@@ -46,7 +56,7 @@ fn wrong_window_fails_closed() {
     let mut shifted = frames_a[1..].to_vec();
     shifted.push(frames_b[0].clone());
 
-    let wrong = decoder.decode_qr(&shifted, "window-master");
+    let wrong = decoder.decode_qr(&shifted, "window-master", &policy);
     assert!(wrong.is_err());
 }
 
@@ -54,12 +64,11 @@ fn wrong_window_fails_closed() {
 fn naive_accumulation_does_not_decode_layer1() {
     let config = test_config();
     let encoder = TemporalEncoder::new(config.clone()).unwrap();
-    let decoder = TemporalDecoder::new(config).unwrap();
 
     let frames = encoder
         .encode_message("naive-master", "naive-bootstrap")
         .unwrap();
-    let naive = decoder.naive_decode_qr(&frames).unwrap();
+    let naive = try_extract_qr(&naive_field(&frames).unwrap());
 
     assert!(naive.is_none());
 }
@@ -76,7 +85,7 @@ fn correct_key_score_exceeds_wrong_key_and_naive_baselines() {
 
     let correct = decoder.correlation_score(&frames, "score-master").unwrap();
     let wrong = decoder.correlation_score(&frames, "other-master").unwrap();
-    let naive = decoder.naive_score(&frames).unwrap();
+    let naive = detector_score(&naive_field(&frames).unwrap());
 
     assert!(correct > wrong, "correct score {correct} should exceed wrong-key score {wrong}");
     assert!(correct > naive, "correct score {correct} should exceed naive score {naive}");

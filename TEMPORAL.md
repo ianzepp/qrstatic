@@ -6,6 +6,13 @@ Production codec design for visually static steganographic transport.
 
 This document defines the intended production codec for `qrstatic`.
 
+Current repository status:
+
+- `temporal` Stage 1 Layer 1 exists in code
+- it is still a fixed-window bootstrap implementation, not the full production stack
+- packet/FEC Layer 2 is not implemented yet
+- the debug viewer and eval tooling now target `temporal`, not the old reference codecs
+
 All existing codecs in this repository should be treated as experimental or reference designs:
 
 - `xor`
@@ -143,6 +150,28 @@ The critical rule is:
 
 Recovery uses keyed matched filtering, not plain summation. This follows the DSSS and spread-spectrum watermarking result that many weak contributions can be concentrated into a strong detector response only when the receiver knows the correct schedule and test sequence.
 
+## Current Stage 1 Implementation
+
+The current implemented Stage 1 in the repository does the following:
+
+- uses `Grid<f32>` carrier frames
+- uses fixed even-length decode windows
+- uses balanced pseudorandom `+1/-1` temporal schedules
+- uses per-frame keyed spatial permutation before emission so raw frames do not carry a stable centered QR layout
+- uses keyed matched filtering to reconstruct a logical correlation field
+- computes a detector score from the correlation field
+- gates QR recovery on an explicit detector threshold
+
+What it does not do yet:
+
+- Layer 2 payload packets
+- packet FEC
+- blind synchronization or sliding acquisition
+- threshold calibration from large empirical sweeps
+- richer detector statistics than the current scalar score
+
+This matters because the design is no longer only a proposal. Stage 1 behavior should now be described in terms that match the implemented contract.
+
 ## Layer 1
 
 Layer 1 carries a QR code.
@@ -187,6 +216,20 @@ L1(x, y) = sum over t of frame_t(x, y) * c1_t(x, y)
 ```
 
 After correlation, threshold or normalize `L1` into a QR grid and decode it.
+
+### Stage 1 Contract
+
+The current Stage 1 contract should be treated as:
+
+1. encode a fixed window using a temporal key and Layer 1 QR payload
+2. correlate a candidate frame window using that same temporal key
+3. compute a detector score from the correlation field
+4. reject the window if the detector score does not meet policy threshold
+5. only then attempt QR extraction and QR decoding
+
+This is an intentionally smaller and sharper contract than "always try QR decode and see what happens."
+
+The codec primitive is the correlation field plus detector score. QR recovery is a consumer of that primitive.
 
 ## Layer 2
 
@@ -328,6 +371,14 @@ Stage 1 assumptions:
 The decoder should therefore start as a fixed-window correlator over a candidate frame block. This is the simplest case supported by DSSS acquisition literature: test the received block against the expected spreading schedule and declare success only when detector response exceeds a conservative threshold.
 
 If later stages require blind start-offset discovery, the next step should be a serial or parallel search over candidate offsets using the same matched-filter test, not a redesign of the physical layer.
+
+### Threshold Policy
+
+The current implementation now reflects an explicit thresholded decode policy instead of an implicit "decode succeeded if QR extraction happened to work" policy.
+
+That is the correct direction.
+
+However, the current threshold should still be treated as provisional until it is calibrated from broader eval data. The important invariant is not the specific numeric threshold value; the important invariant is that decode acceptance is controlled by a detector policy grounded in measured wrong-key and wrong-window response distributions.
 
 ## Packet and FEC Layer
 
@@ -535,6 +586,7 @@ The production implementation should not be accepted until the following are mea
 - the correct key and correct window recover Layer 1 reliably
 - QR decode success rate is high across representative trials
 - correct-key detector response is well separated from the distribution of random wrong-key responses
+- decode acceptance is controlled by an explicit detector threshold, not only by whether QR decode happened to succeed
 
 ### Wrong-Key Rejection
 
@@ -568,9 +620,10 @@ Build:
 - pseudorandom balanced temporal code family
 - fixed decode window
 - keyed Layer 1 correlation
-- QR recovery only
+- explicit detector policy and thresholded QR recovery
 - detector score instrumentation
 - wrong-key and wrong-window response measurement
+- per-frame keyed spatial permutation to avoid stable raw-frame structure
 
 Viewer should show:
 
@@ -580,6 +633,25 @@ Viewer should show:
 - detector score for correct and incorrect keys
 
 If Stage 1 fails the visual-static requirement, stop and redesign.
+
+### Stage 1 Current State
+
+Implemented now:
+
+- fixed-window `temporal` Layer 1 codec
+- keyed correlation field reconstruction
+- detector score reporting
+- thresholded decode policy
+- debug viewer targeting `temporal`
+- CLI eval runner for repeated wrong-key / wrong-window / naive-path measurements
+
+Not implemented yet:
+
+- calibrated threshold selection from larger sweeps
+- packet layer
+- Layer 2 embedding
+- residual subtraction and Layer 2 decode
+- synchronization search beyond fixed known windows
 
 ### Stage 2: Packet Layer
 
@@ -611,6 +683,12 @@ Only after earlier stages succeed:
 The eventual public API should center on one production codec:
 
 - `qrstatic::codec::temporal`
+
+Its shape should stay honest:
+
+- correlation field reconstruction is the core primitive
+- decode acceptance should be explicit policy, not an accidental side effect of QR decoding
+- eval-only helpers should not silently become product-surface semantics
 
 All new docs, viewer work, CLI examples, and product-facing commands should target `temporal`.
 

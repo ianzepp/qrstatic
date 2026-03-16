@@ -5,7 +5,10 @@ use eframe::egui::{
     self, Align, Color32, ColorImage, Context, Grid as UiGrid, RichText, TextureHandle,
     TextureOptions, Vec2,
 };
-use qrstatic::codec::temporal::{TemporalConfig, TemporalDecoder, TemporalEncoder};
+use qrstatic::codec::temporal::{
+    TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, naive_field,
+    try_extract_qr,
+};
 use qrstatic::{Grid, qr};
 
 const DEFAULT_WIDTH: usize = 41;
@@ -186,13 +189,14 @@ struct DebugViewerApp {
 
 #[derive(Debug, Clone)]
 struct ViewerConfig {
-    master_key: String,
+    temporal_key: String,
     qr_payload: String,
     width: usize,
     height: usize,
     n_frames: usize,
     noise_amplitude: f32,
     l1_amplitude: f32,
+    min_detector_score: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -226,13 +230,14 @@ impl DebugViewerApp {
             .map_err(|err| format!("failed to generate temporal debug frames: {err}"))?;
 
         let viewer_config = ViewerConfig {
-            master_key: args.master_key,
+            temporal_key: args.master_key,
             qr_payload: args.qr_payload,
             width: args.width,
             height: args.height,
             n_frames: args.n_frames,
             noise_amplitude: args.noise_amplitude,
             l1_amplitude: args.l1_amplitude,
+            min_detector_score: 6.0,
         };
 
         Ok(Self {
@@ -402,7 +407,7 @@ fn draw_stats(
                 "decode",
                 stats.decoded_message.as_deref().unwrap_or("none"),
             );
-            stat_row(ui, "master", &config.master_key);
+            stat_row(ui, "key", &config.temporal_key);
             stat_row(ui, "qr", &config.qr_payload);
             stat_row(
                 ui,
@@ -499,15 +504,20 @@ fn compute_stats(
         .as_ref()
         .and_then(|decoder| {
             if frames.len() == config.n_frames {
-                decoder.decode_qr(frames, &config.master_key).ok()
+                decoder
+                    .decode_qr(
+                        frames,
+                        &config.temporal_key,
+                        &TemporalDecodePolicy::fixed_threshold(config.min_detector_score).ok()?,
+                    )
+                    .ok()
             } else {
                 None
             }
         });
-    let naive_qr_visible = decoder
-        .as_ref()
-        .and_then(|decoder| decoder.naive_decode_qr(frames).ok())
-        .flatten()
+    let naive_qr_visible = naive_field(frames)
+        .ok()
+        .and_then(|field| try_extract_qr(&field))
         .is_some();
     let decoded_message = decoded.as_ref().and_then(|result| result.message.clone());
     let detector_score = decoded.as_ref().map(|result| result.detector_score);
@@ -563,7 +573,8 @@ fn compute_correlation_prefix(config: &ViewerConfig, frames: &[Grid<f32>]) -> Re
     let decoder =
         TemporalDecoder::new(temporal_config).map_err(|err| format!("failed to construct temporal decoder: {err}"))?;
     decoder
-        .correlate_prefix(frames, &config.master_key)
+        .correlate_prefix(frames, &config.temporal_key)
+        .map(|correlation| correlation.field)
         .map_err(|err| format!("failed to correlate temporal prefix: {err}"))
 }
 

@@ -1,7 +1,10 @@
 use std::env;
 use std::process::ExitCode;
 
-use qrstatic::codec::temporal::{TemporalConfig, TemporalDecoder, TemporalEncoder};
+use qrstatic::codec::temporal::{
+    TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, detector_score,
+    naive_field, try_extract_qr,
+};
 use qrstatic::Grid;
 
 fn main() -> ExitCode {
@@ -101,6 +104,7 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
     .map_err(|err| err.to_string())?;
     let encoder = TemporalEncoder::new(config.clone()).map_err(|err| err.to_string())?;
     let decoder = TemporalDecoder::new(config).map_err(|err| err.to_string())?;
+    let policy = TemporalDecodePolicy::fixed_threshold(6.0).map_err(|err| err.to_string())?;
 
     let mut summary = EvalSummary {
         correct_decode_successes: 0,
@@ -127,7 +131,7 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
             .encode_message(&other_master, &other_qr)
             .map_err(|err| format!("trial {trial}: failed to encode secondary frames: {err}"))?;
 
-        let correct_decode = decoder.decode_qr(&frames, &master_key).ok();
+        let correct_decode = decoder.decode_qr(&frames, &master_key, &policy).ok();
         if correct_decode
             .as_ref()
             .and_then(|result| result.message.as_deref())
@@ -136,19 +140,20 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
             summary.correct_decode_successes += 1;
         }
 
-        if decoder.decode_qr(&frames, &wrong_key).is_ok() {
+        if decoder.decode_qr(&frames, &wrong_key, &policy).is_ok() {
             summary.wrong_key_decode_successes += 1;
         }
 
         let wrong_window = make_wrong_window(&frames, &other_frames);
-        if decoder.decode_qr(&wrong_window, &master_key).is_ok() {
+        if decoder.decode_qr(&wrong_window, &master_key, &policy).is_ok() {
             summary.wrong_window_decode_successes += 1;
         }
 
-        if decoder
-            .naive_decode_qr(&frames)
-            .map_err(|err| format!("trial {trial}: failed to score naive decode: {err}"))?
-            .is_some()
+        if try_extract_qr(
+            &naive_field(&frames)
+                .map_err(|err| format!("trial {trial}: failed to build naive field: {err}"))?,
+        )
+        .is_some()
         {
             summary.naive_decode_successes += 1;
         }
@@ -169,9 +174,10 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
                 .map_err(|err| format!("trial {trial}: failed to score wrong window: {err}"))?,
         );
         summary.naive_scores.push(
-            decoder
-                .naive_score(&frames)
-                .map_err(|err| format!("trial {trial}: failed to score naive path: {err}"))?,
+            detector_score(
+                &naive_field(&frames)
+                    .map_err(|err| format!("trial {trial}: failed to score naive path: {err}"))?,
+            ),
         );
     }
 

@@ -28,10 +28,34 @@ impl TemporalConfig {
     }
 }
 
+/// Layer 1 decode policy for the temporal codec.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemporalDecodePolicy {
+    pub min_detector_score: f32,
+}
+
+impl TemporalDecodePolicy {
+    pub fn fixed_threshold(min_detector_score: f32) -> Result<Self> {
+        if min_detector_score <= 0.0 {
+            return Err(Error::Codec(
+                "temporal decode policy requires min_detector_score > 0".into(),
+            ));
+        }
+        Ok(Self { min_detector_score })
+    }
+}
+
+/// Fixed-window Layer 1 correlation output for the temporal codec.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemporalCorrelation {
+    pub field: Grid<f32>,
+    pub detector_score: f32,
+}
+
 /// Fixed-window Layer 1 decode output for the temporal codec.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemporalDecodeResult {
-    pub correlation: Grid<f32>,
+    pub correlation: TemporalCorrelation,
     pub detector_score: f32,
     pub qr: Grid<u8>,
     pub message: Option<String>,
@@ -117,14 +141,18 @@ impl TemporalDecoder {
         &self.config
     }
 
-    pub fn correlate_prefix(&self, frames: &[Grid<f32>], master_key: &str) -> Result<Grid<f32>> {
+    pub fn correlate_prefix(
+        &self,
+        frames: &[Grid<f32>],
+        temporal_key: &str,
+    ) -> Result<TemporalCorrelation> {
         validate_temporal_prefix_frames(frames, &self.config)?;
         let schedule =
-            build_temporal_schedule(master_key, self.config.frame_shape, self.config.n_frames);
+            build_temporal_schedule(temporal_key, self.config.frame_shape, self.config.n_frames);
         let mut data = vec![0.0; self.config.frame_shape.0 * self.config.frame_shape.1];
 
         for frame_index in 0..frames.len() {
-            let permutation = frame_permutation(master_key, frame_index, self.config.frame_shape);
+            let permutation = frame_permutation(temporal_key, frame_index, self.config.frame_shape);
             let logical_frame = unpermute_grid(&frames[frame_index], &permutation);
 
             for ((acc, &sample), &chip) in data
@@ -136,30 +164,44 @@ impl TemporalDecoder {
             }
         }
 
-        Ok(Grid::from_vec(
-            data,
-            self.config.frame_shape.0,
-            self.config.frame_shape.1,
-        ))
+        let field = Grid::from_vec(data, self.config.frame_shape.0, self.config.frame_shape.1);
+        let detector_score = detector_score(&field);
+
+        Ok(TemporalCorrelation {
+            field,
+            detector_score,
+        })
     }
 
-    pub fn correlate(&self, frames: &[Grid<f32>], master_key: &str) -> Result<Grid<f32>> {
+    pub fn correlate(&self, frames: &[Grid<f32>], temporal_key: &str) -> Result<TemporalCorrelation> {
         validate_temporal_frames(frames, &self.config)?;
-        self.correlate_prefix(frames, master_key)
+        self.correlate_prefix(frames, temporal_key)
     }
 
-    pub fn correlation_score(&self, frames: &[Grid<f32>], master_key: &str) -> Result<f32> {
-        let correlation = self.correlate(frames, master_key)?;
-        Ok(detector_score(&correlation))
+    pub fn correlation_score(&self, frames: &[Grid<f32>], temporal_key: &str) -> Result<f32> {
+        let correlation = self.correlate(frames, temporal_key)?;
+        Ok(correlation.detector_score)
     }
 
-    pub fn decode_qr(&self, frames: &[Grid<f32>], master_key: &str) -> Result<TemporalDecodeResult> {
-        let correlation = self.correlate(frames, master_key)?;
-        let sign_grid = sign_grid_from_field(&correlation);
+    pub fn decode_qr(
+        &self,
+        frames: &[Grid<f32>],
+        temporal_key: &str,
+        policy: &TemporalDecodePolicy,
+    ) -> Result<TemporalDecodeResult> {
+        let correlation = self.correlate(frames, temporal_key)?;
+        if correlation.detector_score < policy.min_detector_score {
+            return Err(Error::Codec(format!(
+                "temporal detector score {:.3} did not reach threshold {:.3}",
+                correlation.detector_score, policy.min_detector_score
+            )));
+        }
+
+        let sign_grid = sign_grid_from_field(&correlation.field);
         let qr = extract_qr_from_sign_grid(&sign_grid)
             .ok_or_else(|| Error::Codec("could not extract a valid QR crop from temporal field".into()))?;
         let message = qr::decode::decode(&qr).ok();
-        let detector_score = detector_score(&correlation);
+        let detector_score = correlation.detector_score;
 
         Ok(TemporalDecodeResult {
             correlation,
@@ -167,18 +209,6 @@ impl TemporalDecoder {
             qr,
             message,
         })
-    }
-
-    pub fn naive_decode_qr(&self, frames: &[Grid<f32>]) -> Result<Option<Grid<u8>>> {
-        validate_temporal_frames(frames, &self.config)?;
-        let accumulated = naive_accumulate(frames);
-        let sign_grid = sign_grid_from_field(&accumulated);
-        Ok(extract_qr_from_sign_grid(&sign_grid))
-    }
-
-    pub fn naive_score(&self, frames: &[Grid<f32>]) -> Result<f32> {
-        validate_temporal_frames(frames, &self.config)?;
-        Ok(detector_score(&naive_accumulate(frames)))
     }
 }
 
@@ -362,8 +392,18 @@ fn sign_grid_from_field(field: &Grid<f32>) -> Grid<u8> {
     field.map(|&value| u8::from(value < 0.0))
 }
 
-fn detector_score(field: &Grid<f32>) -> f32 {
+pub fn detector_score(field: &Grid<f32>) -> f32 {
     field.data().iter().map(|value| value.abs()).sum::<f32>() / field.len() as f32
+}
+
+pub fn naive_field(frames: &[Grid<f32>]) -> Result<Grid<f32>> {
+    validate_matching_frames(frames, "cannot decode zero temporal frames")?;
+    Ok(naive_accumulate(frames))
+}
+
+pub fn try_extract_qr(field: &Grid<f32>) -> Option<Grid<u8>> {
+    let sign_grid = sign_grid_from_field(field);
+    extract_qr_from_sign_grid(&sign_grid)
 }
 
 #[cfg(test)]
