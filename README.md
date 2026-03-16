@@ -534,11 +534,12 @@ qrstatic = { git = "https://github.com/ianzepp/qrstatic" }
 git clone git@github.com:ianzepp/qrstatic.git
 cd qrstatic
 cargo test
+cargo run -p qrstatic-cli -- help
 ```
 
 ## What's Inside
 
-This crate is entirely self-contained — no external dependencies at all:
+The core library crate is entirely self-contained — no external dependencies at all:
 
 ```mermaid
 graph TD
@@ -583,52 +584,61 @@ graph TD
 ### Repository Layout
 
 ```
-src/
-  lib.rs                 # Public re-exports
-  error.rs               # Error enum, Result alias
-  grid.rs                # Grid<T> — 2D container over Vec<T>
-  sha256.rs              # Hand-rolled SHA-256 (FIPS 180-4)
-  prng.rs                # Xoshiro256** seeded via SHA-256
-  bits.rs                # Bit pack/unpack, majority voting
-  qr/
-    encode.rs            # QR encoder (byte mode, EC-H, v1-6)
-    decode.rs            # QR decoder (own output only)
-    gf256.rs             # GF(256) field arithmetic
-    reed_solomon.rs      # RS encoder/decoder
-    mask.rs              # 8 mask patterns + penalty scoring
-    format.rs            # Format/version info encoding
-  codec/
-    xor.rs               # Binary XOR
-    signed.rs            # Signed accumulation
-    binary.rs            # Probability-biased binary static
-    analog.rs            # Analog grayscale + magnitude payload
-    layered.rs           # Two-layer recursive (L1/L2)
-    sliding.rs           # Sliding window + L2 overlay
-    audio.rs             # Audio steganography
-tests/
-  codec_*.rs             # Per-codec integration tests
-  hygiene.rs             # Build hygiene checks
+Cargo.toml               # Workspace manifest
+crates/
+  qrstatic/
+    Cargo.toml           # Core library crate
+    src/
+      lib.rs             # Public re-exports
+      error.rs           # Error enum, Result alias
+      grid.rs            # Grid<T> — 2D container over Vec<T>
+      sha256.rs          # Hand-rolled SHA-256 (FIPS 180-4)
+      prng.rs            # Xoshiro256** seeded via SHA-256
+      bits.rs            # Bit pack/unpack, majority voting
+      qr/
+        encode.rs        # QR encoder (byte mode, EC-H, v1-6)
+        decode.rs        # QR decoder (own output only)
+        gf256.rs         # GF(256) field arithmetic
+        reed_solomon.rs  # RS encoder/decoder
+        mask.rs          # 8 mask patterns + penalty scoring
+        format.rs        # Format/version info encoding
+      codec/
+        xor.rs           # Binary XOR
+        signed.rs        # Signed accumulation
+        binary.rs        # Probability-biased binary static
+        analog.rs        # Analog grayscale + magnitude payload
+        layered.rs       # Two-layer recursive (L1/L2)
+        sliding.rs       # Sliding window + L2 overlay
+        audio.rs         # Audio steganography
+    tests/
+      codec_*.rs         # Per-codec integration tests
+      hygiene.rs         # Build hygiene checks
+  qrstatic-cli/
+    Cargo.toml           # CLI package
+    src/main.rs          # `qrstatic encode` / `qrstatic decode`
 ```
 
 ## Design Constraints
 
-This crate is intentionally narrow:
+The `qrstatic` library crate is intentionally narrow:
 
 - **Zero dependencies** — not even `rand` or `sha2`. Everything is hand-rolled.
 - **No camera/image processing** — no OpenCV, no ffmpeg, no image decoding.
 - **Deterministic** — same inputs always produce the same frames. Every codec is fully reproducible.
 - **QR decoder is specialized** — optimized for grids produced by this crate, not arbitrary photographed QR codes.
-- **Library, not application** — this is a reference implementation for steganographic experiments.
+- **Library, not application** — the core crate is a reference implementation for steganographic experiments.
 
 ## Project Status
 
 Implementation plan complete through Phase 10 (see [PLAN.md](PLAN.md)).
 
-Validated locally on March 15, 2026:
+Validated locally on March 16, 2026:
 - `cargo doc --no-deps`
 - `cargo build`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test` — **186 passing functional tests + 6 hygiene tests**
+
+The repository now also includes a sibling CLI crate with the initial `qrstatic encode` / `qrstatic decode` command scaffolding.
 
 ## Origin
 

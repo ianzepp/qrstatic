@@ -15,35 +15,45 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 - Phase 8 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
 - Phase 9 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
 - Phase 10 is complete and validated with `cargo doc --no-deps`, `cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` (186 passing tests, plus 6 hygiene tests, on 2026-03-15).
+- The repository has since been restructured into a Cargo workspace. The core library now lives under `crates/qrstatic`, and the initial CLI package lives under `crates/qrstatic-cli`.
+- Unless a phase note says otherwise, all historical `src/...` file references below now map to `crates/qrstatic/src/...`.
 
 ## Architecture
 
 ```
 qrstatic/
-  src/
-    lib.rs                    # Public re-exports
-    error.rs                  # Error enum, Result alias
-    grid.rs                   # Grid<T> — 2D container over Vec<T>
-    sha256.rs                 # Hand-rolled SHA-256
-    prng.rs                   # Xoshiro256** seeded PRNG
-    bits.rs                   # Bit pack/unpack, majority voting
-    qr/
-      mod.rs                  # Re-exports
-      gf256.rs                # GF(256) field arithmetic
-      reed_solomon.rs         # RS encoder/decoder
-      encode.rs               # QR encoder (byte mode, EC-H, v1-6)
-      decode.rs               # QR decoder (own programmatic output only)
-      mask.rs                 # 8 mask patterns + penalty scoring
-      format.rs               # Format/version info encoding
-    codec/
-      mod.rs                  # Frame enum, shared types, traits
-      xor.rs                  # Binary XOR
-      analog.rs               # Analog grayscale + payload in magnitude
-      binary.rs               # Binary static, probability-biased
-      signed.rs               # Signed accumulation + noise reconstruction
-      layered.rs              # Two-layer recursive (L1/L2)
-      sliding.rs              # Sliding window + L2 overlay
-      audio.rs                # Audio steganography
+  Cargo.toml                  # Workspace manifest
+  crates/
+    qrstatic/
+      src/
+        lib.rs                # Public re-exports
+        error.rs              # Error enum, Result alias
+        grid.rs               # Grid<T> — 2D container over Vec<T>
+        sha256.rs             # Hand-rolled SHA-256
+        prng.rs               # Xoshiro256** seeded PRNG
+        bits.rs               # Bit pack/unpack, majority voting
+        qr/
+          mod.rs              # Re-exports
+          gf256.rs            # GF(256) field arithmetic
+          reed_solomon.rs     # RS encoder/decoder
+          encode.rs           # QR encoder (byte mode, EC-H, v1-6)
+          decode.rs           # QR decoder (own programmatic output only)
+          mask.rs             # 8 mask patterns + penalty scoring
+          format.rs           # Format/version info encoding
+        codec/
+          mod.rs              # Frame enum, shared types, traits
+          xor.rs              # Binary XOR
+          analog.rs           # Analog grayscale + payload in magnitude
+          binary.rs           # Binary static, probability-biased
+          signed.rs           # Signed accumulation + noise reconstruction
+          layered.rs          # Two-layer recursive (L1/L2)
+          sliding.rs          # Sliding window + L2 overlay
+          audio.rs            # Audio steganography
+      tests/
+        codec_*.rs            # Integration tests
+        hygiene.rs            # Build hygiene checks
+    qrstatic-cli/
+      src/main.rs             # `qrstatic encode` / `qrstatic decode`
 ```
 
 ## Phases

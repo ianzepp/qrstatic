@@ -1,0 +1,15 @@
+[package]
+name = "qrstatic-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CLI for qrstatic steganographic codecs"
+license = "MIT"
+repository = "https://github.com/ianzepp/qrstatic"
+publish = false
+
+[[bin]]
+name = "qrstatic"
+path = "src/main.rs"
+
+[dependencies]
+qrstatic = { path = "../qrstatic" }

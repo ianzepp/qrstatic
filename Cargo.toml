@@ -1,11 +1,10 @@
-[package]
-name = "qrstatic"
-version = "0.1.0"
-edition = "2024"
-description = "Zero-dependency steganographic QR codes hidden in accumulated noise frames"
-license = "MIT"
-repository = "https://github.com/ianzepp/qrstatic"
-keywords = ["qr", "steganography", "encoding", "noise"]
-categories = ["encoding", "multimedia"]
-
-[dependencies]
+[workspace]
+members = [
+    "crates/qrstatic",
+    "crates/qrstatic-cli",
+]
+default-members = [
+    "crates/qrstatic",
+    "crates/qrstatic-cli",
+]
+resolver = "3"
