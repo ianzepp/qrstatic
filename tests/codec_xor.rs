@@ -1,9 +1,10 @@
-mod common;
+#[path = "common/xor.rs"]
+mod xor_common;
 
-use common::{TEST_MESSAGE, xor_frames_for_message, xor_roundtrip, xor_stream_roundtrip};
 use qrstatic::Error;
 use qrstatic::Grid;
 use qrstatic::codec::xor::{XorDecoder, XorEncoder, XorStreamDecoder};
+use xor_common::{TEST_MESSAGE, xor_frames_for_message, xor_roundtrip, xor_stream_roundtrip};
 
 #[test]
 fn roundtrip_n_2() {

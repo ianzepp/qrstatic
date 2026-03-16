@@ -7,8 +7,9 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 
 - Phase 1 is complete.
 - Phase 2 is complete and validated with `cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` (109 passing tests as of 2026-03-15).
-- Phase 3 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` with 120 passing tests as of 2026-03-15).
-- Phase 4 is the next implementation target.
+- Phase 3 is complete and validated.
+- Phase 4 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` with 131 passing tests as of 2026-03-15).
+- Phase 5 is the next implementation target.
 
 ## Architecture
 
@@ -115,6 +116,13 @@ Validation notes:
 ### Phase 4 — Signed Codec
 
 Signed accumulation with payload encoding via expected noise reconstruction.
+
+Status: complete.
+
+Validation notes:
+- Signed carrier frames are deterministic `±1` grids whose per-cell frame allocation guarantees the final accumulated QR sign.
+- Payload is recovered from magnitude deviation relative to the QR-aligned baseline.
+- Streaming decode, partial-frame non-decode, minimum-frame validation, and a maximum-capacity payload case are covered.
 
 **Files:**
 - `src/codec/signed.rs` — `SignedEncoder`: N frames of ±1 values. Final frame forces correct QR sign + magnitude bias for payload. `SignedDecoder`: accumulate frames, extract QR from sign, extract payload by subtracting expected noise accumulation and reading residual signs. Streaming wrappers.

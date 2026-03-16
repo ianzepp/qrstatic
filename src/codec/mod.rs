@@ -1,5 +1,6 @@
 use crate::Grid;
 
+pub mod signed;
 pub mod xor;
 
 /// A carrier frame for one of the supported codec families.
