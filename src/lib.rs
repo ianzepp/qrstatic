@@ -2,6 +2,7 @@ pub mod bits;
 pub mod error;
 pub mod grid;
 pub mod prng;
+pub mod qr;
 pub mod sha256;
 
 pub use error::{Error, Result};
