@@ -10,7 +10,8 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 - Phase 3 is complete and validated.
 - Phase 4 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` with 131 passing tests as of 2026-03-15).
 - Phase 5 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
-- Phase 6 is the next implementation target.
+- Phase 6 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
+- Phase 7 is the next implementation target.
 
 ## Architecture
 
@@ -160,6 +161,14 @@ Validation notes:
 ### Phase 6 — Analog Codec
 
 Float32 frames with signal accumulating linearly, noise as √N.
+
+Status: complete.
+
+Validation notes:
+- Carrier frames are deterministic `f32` noise plus a constant per-frame signed signal, so accumulated signal grows linearly with `N`.
+- QR content is recovered from the sign of the accumulated field.
+- Payload is recovered from cleaned magnitude after reconstructing deterministic noise from the QR key.
+- Streaming encode/decode, partial-window non-decode, parameter variation, and an SNR-growth check are covered.
 
 **Files:**
 - `src/codec/analog.rs` — `AnalogEncoder`: float32 frames with configurable signal strength and noise amplitude. QR in accumulated sign, payload in magnitude deviation. `AnalogDecoder`: accumulate, threshold, majority vote on magnitude. Streaming wrappers.
