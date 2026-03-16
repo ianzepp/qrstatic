@@ -12,12 +12,12 @@ pub struct Prng {
 impl Prng {
     /// Create a PRNG from a 32-byte seed (e.g. SHA-256 output).
     pub fn from_seed(seed: [u8; 32]) -> Self {
-        let s = [
-            u64::from_le_bytes(seed[0..8].try_into().unwrap()),
-            u64::from_le_bytes(seed[8..16].try_into().unwrap()),
-            u64::from_le_bytes(seed[16..24].try_into().unwrap()),
-            u64::from_le_bytes(seed[24..32].try_into().unwrap()),
-        ];
+        let s = std::array::from_fn(|index| {
+            let start = index * 8;
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&seed[start..start + 8]);
+            u64::from_le_bytes(bytes)
+        });
         Self { s }
     }
 
