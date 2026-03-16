@@ -160,7 +160,9 @@ impl LayeredDecoder {
         validate_matching_frames(frames, "cannot decode zero layered frames")?;
         let l1_outputs = decode_layer1_outputs(frames, self.config.n1)?;
         let Some(first_l1) = l1_outputs.first() else {
-            return Err(Error::Codec("not enough frames for one layered L1 output".into()));
+            return Err(Error::Codec(
+                "not enough frames for one layered L1 output".into(),
+            ));
         };
 
         let layer1_qr = extract_qr(first_l1).ok_or_else(|| {
@@ -196,7 +198,9 @@ impl LayeredDecoder {
             self.config.layer1_noise,
         )?;
         let layer2_qr = extract_qr(&layer2_field);
-        let layer2_message = layer2_qr.as_ref().and_then(|grid| qr::decode::decode(grid).ok());
+        let layer2_message = layer2_qr
+            .as_ref()
+            .and_then(|grid| qr::decode::decode(grid).ok());
         let payload = match layer2_message.as_deref() {
             Some(layer2_key) => Some(decode_layer2_payload(
                 &layer2_field,
@@ -321,7 +325,10 @@ impl LayeredStreamDecoder {
 }
 
 impl LayeredDecoder {
-    fn decode_from_layer1_outputs(&self, l1_outputs: Vec<Grid<f32>>) -> Result<LayeredDecodeResult> {
+    fn decode_from_layer1_outputs(
+        &self,
+        l1_outputs: Vec<Grid<f32>>,
+    ) -> Result<LayeredDecodeResult> {
         let first_l1 = l1_outputs
             .first()
             .ok_or_else(|| Error::Codec("missing layered L1 outputs".into()))?;
@@ -347,7 +354,9 @@ impl LayeredDecoder {
             self.config.layer1_noise,
         )?;
         let layer2_qr = extract_qr(&layer2_field);
-        let layer2_message = layer2_qr.as_ref().and_then(|grid| qr::decode::decode(grid).ok());
+        let layer2_message = layer2_qr
+            .as_ref()
+            .and_then(|grid| qr::decode::decode(grid).ok());
         let payload = match layer2_message.as_deref() {
             Some(layer2_key) => Some(decode_layer2_payload(
                 &layer2_field,
@@ -411,7 +420,13 @@ fn payload_bias_map(frame_shape: (usize, usize), payload: &[u8], payload_delta: 
     }
     let bits = bytes_to_bits(payload);
     let data = (0..(frame_shape.0 * frame_shape.1))
-        .map(|idx| if bits[idx % bits.len()] == 1 { payload_delta } else { -payload_delta })
+        .map(|idx| {
+            if bits[idx % bits.len()] == 1 {
+                payload_delta
+            } else {
+                -payload_delta
+            }
+        })
         .collect();
     Grid::from_vec(data, frame_shape.0, frame_shape.1)
 }
@@ -437,7 +452,12 @@ fn expected_l1_noise_sum(
     let mut sum = Grid::new(frame_shape.0, frame_shape.1);
     for offset in 0..n1 {
         let global = (output_index * n1 + offset) as u64;
-        let frame = noise_frame(frame_shape, &format!("layer1:{layer1_key}"), global, layer1_noise);
+        let frame = noise_frame(
+            frame_shape,
+            &format!("layer1:{layer1_key}"),
+            global,
+            layer1_noise,
+        );
         for (lhs, rhs) in sum.data_mut().iter_mut().zip(frame.data().iter()) {
             *lhs += *rhs;
         }
@@ -453,7 +473,10 @@ fn decode_layer2_field(
     layer1_noise: f32,
 ) -> Result<Grid<f32>> {
     validate_matching_frames(l1_outputs, "cannot decode zero layered L1 outputs")?;
-    let qr1 = embed_qr_in_frame(&qr::encode::encode(layer1_key)?, (l1_outputs[0].width(), l1_outputs[0].height()))?;
+    let qr1 = embed_qr_in_frame(
+        &qr::encode::encode(layer1_key)?,
+        (l1_outputs[0].width(), l1_outputs[0].height()),
+    )?;
     let expected_signs = qr_signs_in_frame(&qr1);
     let mut layer2 = Grid::new(l1_outputs[0].width(), l1_outputs[0].height());
 
@@ -512,7 +535,10 @@ fn decode_layer2_payload(
     if payload_length == 0 {
         return Ok(Vec::new());
     }
-    let qr2 = embed_qr_in_frame(&qr::encode::encode(layer2_key)?, (layer2_field.width(), layer2_field.height()))?;
+    let qr2 = embed_qr_in_frame(
+        &qr::encode::encode(layer2_key)?,
+        (layer2_field.width(), layer2_field.height()),
+    )?;
     let expected_signs = qr_signs_in_frame(&qr2);
     let expected_noise = expected_l2_noise_sum(
         (layer2_field.width(), layer2_field.height()),
@@ -566,9 +592,11 @@ mod tests {
 
     #[test]
     fn decode_rejects_empty_input() {
-        assert!(LayeredDecoder::new(LayeredConfig::new((41, 41), 2, 2), 0)
-            .unwrap()
-            .decode(&[])
-            .is_err());
+        assert!(
+            LayeredDecoder::new(LayeredConfig::new((41, 41), 2, 2), 0)
+                .unwrap()
+                .decode(&[])
+                .is_err()
+        );
     }
 }

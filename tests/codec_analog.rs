@@ -15,8 +15,7 @@ fn qr_only_roundtrip() {
 #[test]
 fn qr_and_payload_roundtrip() {
     let payload = b"analog payload";
-    let decoded =
-        analog_roundtrip(8, (41, 41), 0.3, 5.0, 0.5, "analog-key", payload).unwrap();
+    let decoded = analog_roundtrip(8, (41, 41), 0.3, 5.0, 0.5, "analog-key", payload).unwrap();
     assert_eq!(decoded.message.as_deref(), Some("analog-key"));
     assert_eq!(decoded.payload.as_deref(), Some(&payload[..]));
 }
@@ -43,8 +42,7 @@ fn snr_improves_with_more_frames() {
             acc
         });
 
-    let short_mean =
-        short_acc.data().iter().map(|v| v.abs()).sum::<f32>() / short_acc.len() as f32;
+    let short_mean = short_acc.data().iter().map(|v| v.abs()).sum::<f32>() / short_acc.len() as f32;
     let long_mean = long_acc.data().iter().map(|v| v.abs()).sum::<f32>() / long_acc.len() as f32;
 
     assert!(long_mean > short_mean);

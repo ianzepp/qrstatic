@@ -122,7 +122,8 @@ impl SlidingEncoder {
     ) -> Result<Vec<Grid<f32>>> {
         let qr2 = embed_qr_in_frame(&qr::encode::encode(l2_key)?, self.config.frame_shape)?;
         let qr2_signs = qr_signs_in_frame(&qr2);
-        let payload_bias = payload_bias_map(self.config.frame_shape, payload, self.config.payload_delta);
+        let payload_bias =
+            payload_bias_map(self.config.frame_shape, payload, self.config.payload_delta);
         let total_l2_frames = self.config.n1 * self.config.n2;
         let l2_per_frame = Grid::from_vec(
             qr2_signs
@@ -192,7 +193,9 @@ impl SlidingDecoder {
     ) -> Result<SlidingDecodeResult> {
         validate_matching_frames(frames, "cannot decode zero sliding frames")?;
         if start + self.config.n1 > frames.len() {
-            return Err(Error::Codec("not enough frames for sliding L1 window".into()));
+            return Err(Error::Codec(
+                "not enough frames for sliding L1 window".into(),
+            ));
         }
         let accumulated = accumulate_f32(&frames[start..start + self.config.n1]);
         let cleaned = match l1_key {
@@ -295,7 +298,9 @@ impl SlidingDecoder {
         );
 
         let layer2_qr = extract_qr(&corrected);
-        let layer2_message = layer2_qr.as_ref().and_then(|grid| qr::decode::decode(grid).ok());
+        let layer2_message = layer2_qr
+            .as_ref()
+            .and_then(|grid| qr::decode::decode(grid).ok());
         let payload = match layer2_message.as_deref() {
             Some(l2_key) => Some(decode_l2_payload(
                 &l2_accumulated,
@@ -366,7 +371,8 @@ impl SlidingStreamEncoder {
             .map(|(&signal, &noise)| signal + noise)
             .collect();
 
-        if let (Some(l2_key), Some(l2_per_frame)) = (self.l2_key.as_deref(), self.l2_per_frame.as_ref())
+        if let (Some(l2_key), Some(l2_per_frame)) =
+            (self.l2_key.as_deref(), self.l2_per_frame.as_ref())
             && self.frame_index < self.config.n1 * self.config.n2
         {
             let l2_noise = noise_frame(
@@ -422,7 +428,9 @@ impl SlidingStreamDecoder {
         }
 
         let start = len - self.decoder.config.n1;
-        let l1 = self.decoder.decode_l1_at_offset(&self.frames, start, None)?;
+        let l1 = self
+            .decoder
+            .decode_l1_at_offset(&self.frames, start, None)?;
         self.last_l1_emit_end = current_end;
 
         if let Some(message) = l1.layer1_message.clone() {
@@ -440,15 +448,21 @@ impl SlidingStreamDecoder {
 
             if self.l1_outputs.len() >= self.decoder.config.n2 {
                 let l1_key = self.l1_outputs[0].0.clone();
-                let mut sampled_frames = Vec::with_capacity(self.decoder.config.n1 * self.decoder.config.n2);
+                let mut sampled_frames =
+                    Vec::with_capacity(self.decoder.config.n1 * self.decoder.config.n2);
                 for i in 0..self.decoder.config.n2 {
                     let block_start = i * self.decoder.config.n1;
                     if block_start + self.decoder.config.n1 <= self.frames.len() {
-                        sampled_frames.extend_from_slice(&self.frames[block_start..block_start + self.decoder.config.n1]);
+                        sampled_frames.extend_from_slice(
+                            &self.frames[block_start..block_start + self.decoder.config.n1],
+                        );
                     }
                 }
-                let (layer2_qr, layer2_message, payload) =
-                    self.decoder.decode_l2(&sampled_frames, &l1_key, self.decoder.expected_payload_len)?;
+                let (layer2_qr, layer2_message, payload) = self.decoder.decode_l2(
+                    &sampled_frames,
+                    &l1_key,
+                    self.decoder.expected_payload_len,
+                )?;
                 return Ok(Some(SlidingDecodeResult {
                     layer1_qr: l1.layer1_qr,
                     layer1_message: Some(l1_key),
@@ -495,7 +509,13 @@ fn payload_bias_map(frame_shape: (usize, usize), payload: &[u8], payload_delta: 
     }
     let bits = bytes_to_bits(payload);
     let data = (0..(frame_shape.0 * frame_shape.1))
-        .map(|idx| if bits[idx % bits.len()] == 1 { payload_delta } else { -payload_delta })
+        .map(|idx| {
+            if bits[idx % bits.len()] == 1 {
+                payload_delta
+            } else {
+                -payload_delta
+            }
+        })
         .collect();
     Grid::from_vec(data, frame_shape.0, frame_shape.1)
 }
@@ -613,7 +633,10 @@ fn decode_l2_payload(
             u8::from(ones > samples.len() / 2)
         })
         .collect();
-    Ok(bits_to_bytes(&bits).into_iter().take(payload_length).collect())
+    Ok(bits_to_bytes(&bits)
+        .into_iter()
+        .take(payload_length)
+        .collect())
 }
 
 fn extract_qr(accumulated: &Grid<f32>) -> Option<Grid<u8>> {

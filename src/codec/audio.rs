@@ -103,7 +103,8 @@ impl AudioDecoder {
         }
 
         let accumulated = Grid::from_vec(accumulated, dim, dim);
-        let qr = extract_qr(&accumulated).unwrap_or_else(|| accumulated.map(|&v| u8::from(v < 0.0)));
+        let qr =
+            extract_qr(&accumulated).unwrap_or_else(|| accumulated.map(|&v| u8::from(v < 0.0)));
         let message = qr::decode::decode(&qr).ok();
 
         Ok(AudioDecodeResult {
@@ -151,7 +152,10 @@ impl AudioStreamEncoder {
     }
 
     pub fn encode_chunk(&mut self, samples: &[f32]) -> Vec<f32> {
-        samples.iter().map(|&sample| self.encode_sample(sample)).collect()
+        samples
+            .iter()
+            .map(|&sample| self.encode_sample(sample))
+            .collect()
     }
 }
 
@@ -229,7 +233,9 @@ fn validate_audio_config(config: &AudioConfig) -> Result<()> {
 fn frame_dim(frame_size: usize) -> Result<usize> {
     let dim = (frame_size as f64).sqrt() as usize;
     if dim * dim != frame_size {
-        return Err(Error::Codec("audio frame_size must be a perfect square".into()));
+        return Err(Error::Codec(
+            "audio frame_size must be a perfect square".into(),
+        ));
     }
     Ok(dim)
 }

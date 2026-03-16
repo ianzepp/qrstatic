@@ -1,4 +1,6 @@
-use qrstatic::codec::sliding::{SlidingConfig, SlidingDecoder, SlidingEncoder, SlidingStreamDecoder, SlidingStreamEncoder};
+use qrstatic::codec::sliding::{
+    SlidingConfig, SlidingDecoder, SlidingEncoder, SlidingStreamDecoder, SlidingStreamEncoder,
+};
 use qrstatic::{Grid, Result, SlidingDecodeResult};
 
 pub fn sliding_frames(
@@ -8,8 +10,7 @@ pub fn sliding_frames(
     payload: &[u8],
     total_frames: usize,
 ) -> Result<Vec<Grid<f32>>> {
-    SlidingEncoder::new(config)?
-        .encode(l1_key, l2_key, payload, total_frames)
+    SlidingEncoder::new(config)?.encode(l1_key, l2_key, payload, total_frames)
 }
 
 pub fn sliding_decode(
@@ -18,8 +19,7 @@ pub fn sliding_decode(
     l1_start: usize,
     payload_len: usize,
 ) -> Result<SlidingDecodeResult> {
-    SlidingDecoder::new(config, payload_len)?
-        .decode(frames, l1_start)
+    SlidingDecoder::new(config, payload_len)?.decode(frames, l1_start)
 }
 
 pub fn sliding_stream(

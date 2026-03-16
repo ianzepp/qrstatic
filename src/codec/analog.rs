@@ -321,9 +321,7 @@ fn validate_analog_params(
 
 fn validate_decode_params(noise_amplitude: f32, signal_strength: f32) -> Result<()> {
     if noise_amplitude <= 0.0 {
-        return Err(Error::Codec(
-            "analog noise_amplitude must be > 0".into(),
-        ));
+        return Err(Error::Codec("analog noise_amplitude must be > 0".into()));
     }
     if signal_strength <= noise_amplitude {
         return Err(Error::Codec(
@@ -370,7 +368,13 @@ fn payload_bias_map(frame_shape: (usize, usize), payload: &[u8], payload_delta: 
 
     let bits = bytes_to_bits(payload);
     let data = (0..n_cells)
-        .map(|idx| if bits[idx % bits.len()] == 1 { payload_delta } else { -payload_delta })
+        .map(|idx| {
+            if bits[idx % bits.len()] == 1 {
+                payload_delta
+            } else {
+                -payload_delta
+            }
+        })
         .collect();
     Grid::from_vec(data, frame_shape.0, frame_shape.1)
 }

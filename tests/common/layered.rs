@@ -37,7 +37,11 @@ pub fn layered_stream_roundtrip(
     payload: &[u8],
 ) -> Result<Vec<LayeredDecodeResult>> {
     let mut encoder = LayeredStreamEncoder::new(LayeredConfig::new(frame_shape, n1, n2))?;
-    encoder.queue_message(layer1_key.to_owned(), layer2_key.to_owned(), payload.to_vec());
+    encoder.queue_message(
+        layer1_key.to_owned(),
+        layer2_key.to_owned(),
+        payload.to_vec(),
+    );
 
     let mut decoder =
         LayeredStreamDecoder::new(LayeredConfig::new(frame_shape, n1, n2), payload.len())?;

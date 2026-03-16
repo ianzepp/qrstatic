@@ -10,8 +10,8 @@ use qrstatic::{Error, Grid};
 
 #[test]
 fn qr_only_roundtrip() {
-    let decoded = binary_roundtrip(24, (41, 41), "binary-seed", 0.8, 0.1, "binary-only", b"")
-        .unwrap();
+    let decoded =
+        binary_roundtrip(24, (41, 41), "binary-seed", 0.8, 0.1, "binary-only", b"").unwrap();
     assert_eq!(decoded.message.as_deref(), Some("binary-only"));
     assert_eq!(decoded.payload.as_deref(), Some(&[][..]));
 }
@@ -19,16 +19,8 @@ fn qr_only_roundtrip() {
 #[test]
 fn qr_and_payload_roundtrip() {
     let payload = b"binary payload";
-    let decoded = binary_roundtrip(
-        60,
-        (41, 41),
-        "binary-seed",
-        0.8,
-        0.1,
-        "binary-key",
-        payload,
-    )
-    .unwrap();
+    let decoded =
+        binary_roundtrip(60, (41, 41), "binary-seed", 0.8, 0.1, "binary-key", payload).unwrap();
     assert_eq!(decoded.message.as_deref(), Some("binary-key"));
     assert_eq!(decoded.payload.as_deref(), Some(&payload[..]));
 }
@@ -93,7 +85,10 @@ fn partial_frames_do_not_decode() {
 #[test]
 fn random_frames_do_not_produce_valid_qr() {
     let frames: Vec<_> = (0..8).map(|_| Grid::filled(41, 41, 1i8)).collect();
-    let decoded = BinaryDecoder::new(0, 0.8).unwrap().decode_message(&frames).unwrap();
+    let decoded = BinaryDecoder::new(0, 0.8)
+        .unwrap()
+        .decode_message(&frames)
+        .unwrap();
     assert!(decoded.message.is_none());
 }
 

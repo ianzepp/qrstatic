@@ -15,7 +15,10 @@ fn roundtrip_with_synthetic_samples() {
         .unwrap()
         .encode_samples(&cover, "audio-static")
         .unwrap();
-    let decoded = AudioDecoder::new(config).unwrap().decode_samples(&encoded).unwrap();
+    let decoded = AudioDecoder::new(config)
+        .unwrap()
+        .decode_samples(&encoded)
+        .unwrap();
     assert_eq!(decoded.message.as_deref(), Some("audio-static"));
 }
 
@@ -28,7 +31,10 @@ fn different_frame_sizes() {
             .unwrap()
             .encode_samples(&cover, "frame-key")
             .unwrap();
-        let decoded = AudioDecoder::new(config).unwrap().decode_samples(&encoded).unwrap();
+        let decoded = AudioDecoder::new(config)
+            .unwrap()
+            .decode_samples(&encoded)
+            .unwrap();
         assert_eq!(decoded.message.as_deref(), Some("frame-key"));
     }
 }

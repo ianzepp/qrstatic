@@ -2,12 +2,15 @@
 mod layered_common;
 
 use layered_common::{layered_frames, layered_roundtrip, layered_stream_roundtrip};
-use qrstatic::codec::layered::{LayeredConfig, LayeredDecoder, LayeredEncoder, LayeredStreamDecoder};
+use qrstatic::codec::layered::{
+    LayeredConfig, LayeredDecoder, LayeredEncoder, LayeredStreamDecoder,
+};
 use qrstatic::{Error, Grid};
 
 #[test]
 fn l1_only_roundtrip() {
-    let decoded = layered_roundtrip((41, 41), 4, 3, "layer1-visible", "layer2-hidden", b"").unwrap();
+    let decoded =
+        layered_roundtrip((41, 41), 4, 3, "layer1-visible", "layer2-hidden", b"").unwrap();
     assert_eq!(decoded.layer1_message.as_deref(), Some("layer1-visible"));
 }
 
@@ -36,7 +39,8 @@ fn default_30_by_30_shape_is_supported() {
 #[test]
 fn streaming_decodes_l1_each_n1_and_l2_at_full_window() {
     let payload = b"stream payload";
-    let outputs = layered_stream_roundtrip((41, 41), 4, 3, "stream-l1", "stream-l2", payload).unwrap();
+    let outputs =
+        layered_stream_roundtrip((41, 41), 4, 3, "stream-l1", "stream-l2", payload).unwrap();
     assert_eq!(outputs.len(), 3);
     assert_eq!(outputs[0].layer1_message.as_deref(), Some("stream-l1"));
     assert!(outputs[0].layer2_message.is_none());
@@ -69,5 +73,8 @@ fn mismatched_dimensions_fail() {
     let decoder = LayeredDecoder::new(LayeredConfig::new((21, 21), 2, 2), 0).unwrap();
     let a = Grid::filled(21, 21, 1.0f32);
     let b = Grid::filled(25, 25, -1.0f32);
-    assert!(matches!(decoder.decode(&[a, b]), Err(Error::GridMismatch { .. })));
+    assert!(matches!(
+        decoder.decode(&[a, b]),
+        Err(Error::GridMismatch { .. })
+    ));
 }

@@ -1,4 +1,6 @@
-use qrstatic::codec::analog::{AnalogDecoder, AnalogEncoder, AnalogStreamDecoder, AnalogStreamEncoder};
+use qrstatic::codec::analog::{
+    AnalogDecoder, AnalogEncoder, AnalogStreamDecoder, AnalogStreamEncoder,
+};
 use qrstatic::{AnalogDecodeResult, Grid, Result};
 
 pub fn analog_roundtrip(
@@ -61,7 +63,10 @@ pub fn analog_stream_roundtrip(
 
     let mut decoder = AnalogStreamDecoder::new(
         n_frames,
-        messages.first().map(|(_, payload)| payload.len()).unwrap_or(0),
+        messages
+            .first()
+            .map(|(_, payload)| payload.len())
+            .unwrap_or(0),
         noise_amplitude,
         signal_strength,
     )?;

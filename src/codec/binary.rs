@@ -1,10 +1,10 @@
 use std::collections::VecDeque;
 
 use crate::bits::{bits_to_bytes, bytes_to_bits};
+use crate::codec::EncodeConfig;
 use crate::codec::common::{
     embed_qr_in_frame, extract_qr_from_sign_grid, qr_signs_in_frame, validate_matching_frames,
 };
-use crate::codec::EncodeConfig;
 use crate::error::{Error, Result};
 use crate::grid::accumulate_i16;
 use crate::{Grid, Prng, qr};
@@ -82,7 +82,11 @@ impl BinaryEncoder {
         let mut frames = Vec::with_capacity(self.config.n_frames);
         for frame_index in 0..self.config.n_frames {
             let frame_seed = frame_seed(&self.config.seed, frame_index as u64);
-            frames.push(sample_binary_frame(self.frame_shape, &bias_map, &frame_seed));
+            frames.push(sample_binary_frame(
+                self.frame_shape,
+                &bias_map,
+                &frame_seed,
+            ));
         }
 
         Ok(frames)
@@ -354,11 +358,7 @@ fn frame_seed(base_seed: &str, frame_index: u64) -> String {
     format!("{base_seed}:{frame_index}")
 }
 
-fn sample_binary_frame(
-    frame_shape: (usize, usize),
-    bias_map: &Grid<f32>,
-    seed: &str,
-) -> Grid<i8> {
+fn sample_binary_frame(frame_shape: (usize, usize), bias_map: &Grid<f32>, seed: &str) -> Grid<i8> {
     let mut rng = Prng::from_str_seed(seed);
     let data = bias_map
         .data()

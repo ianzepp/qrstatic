@@ -64,7 +64,11 @@ fn streaming_l1_periodic_and_l2_after_full_window() {
     .unwrap();
     assert!(!outputs.is_empty());
     assert_eq!(outputs[0].layer1_message.as_deref(), Some("stream-l1"));
-    assert!(outputs.iter().any(|result| result.layer2_message.as_deref() == Some("stream-l2")));
+    assert!(
+        outputs
+            .iter()
+            .any(|result| result.layer2_message.as_deref() == Some("stream-l2"))
+    );
 }
 
 #[test]
@@ -77,5 +81,8 @@ fn mismatched_dimensions_fail() {
     let decoder = SlidingDecoder::new(SlidingConfig::new((21, 21), 4, 2, 2), 0).unwrap();
     let a = Grid::filled(21, 21, 1.0f32);
     let b = Grid::filled(25, 25, -1.0f32);
-    assert!(matches!(decoder.decode(&[a, b], 0), Err(Error::GridMismatch { .. })));
+    assert!(matches!(
+        decoder.decode(&[a, b], 0),
+        Err(Error::GridMismatch { .. })
+    ));
 }
