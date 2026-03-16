@@ -9,7 +9,8 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 - Phase 2 is complete and validated with `cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` (109 passing tests as of 2026-03-15).
 - Phase 3 is complete and validated.
 - Phase 4 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` with 131 passing tests as of 2026-03-15).
-- Phase 5 is the next implementation target.
+- Phase 5 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
+- Phase 6 is the next implementation target.
 
 ## Architecture
 
@@ -137,6 +138,14 @@ Validation notes:
 ### Phase 5 — Binary Static Codec
 
 Probability-biased binary frames. Per-frame deterministic RNG via SHA-256.
+
+Status: complete.
+
+Validation notes:
+- Carrier frames are deterministic `±1` binary static generated from per-frame SHA-256-derived seeds.
+- QR content is recovered from the sign of the accumulated `i16` field.
+- Payload is recovered from QR-aligned magnitude votes against the expected baseline bias.
+- Streaming encode/decode, partial-window non-decode, and the 60-frame default window are covered.
 
 **Files:**
 - `src/codec/binary.rs` — `BinaryEncoder`: each frame is +1/-1 with probability bias toward QR pattern. Payload encoded via bias strength modulation. `BinaryDecoder`: accumulate, threshold at 0, majority vote for payload. Streaming wrappers.

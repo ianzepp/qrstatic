@@ -1,5 +1,6 @@
 use crate::Grid;
 
+pub mod binary;
 pub mod signed;
 pub mod xor;
 
