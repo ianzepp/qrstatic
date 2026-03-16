@@ -8,21 +8,29 @@ pub const DEFAULT_AUDIO_FRAME_SIZE: usize = 64 * 64;
 /// Shared decode output for the audio codec.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioDecodeResult {
+    /// Recovered QR grid.
     pub qr: Grid<u8>,
+    /// Decoded QR message when the recovered grid is valid.
     pub message: Option<String>,
+    /// Accumulated virtual frame used for QR extraction.
     pub accumulated: Grid<f32>,
 }
 
 /// Shared configuration for the audio codec.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioConfig {
+    /// Number of virtual audio frames to accumulate before decode.
     pub n_frames: usize,
+    /// Virtual frame size in samples; must be a perfect square.
     pub frame_size: usize,
+    /// Probability of flipping a sample sign toward the target module polarity.
     pub flip_probability: f32,
+    /// Deterministic seed for the sample-selection PRNG.
     pub seed: String,
 }
 
 impl AudioConfig {
+    /// Construct an audio codec configuration.
     pub fn new(
         n_frames: usize,
         frame_size: usize,

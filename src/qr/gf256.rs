@@ -6,7 +6,9 @@ const POLY: u32 = 0x11d;
 
 /// Precomputed log and exp tables for GF(256).
 pub struct Gf256Tables {
+    /// Exponent table extended to avoid explicit modulo operations.
     pub exp: [u8; 512],
+    /// Logarithm table indexed by field element value.
     pub log: [u8; 256],
 }
 

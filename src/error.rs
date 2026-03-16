@@ -1,7 +1,9 @@
 use std::fmt;
 
+/// Crate-wide result type.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Error type shared by the QR and codec layers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// Data too large for the maximum supported QR version.

@@ -12,20 +12,29 @@ use super::reed_solomon;
 /// QR code capacity information for EC level H.
 #[derive(Debug, Clone, Copy)]
 pub struct VersionInfo {
+    /// QR version number.
     pub version: u8,
+    /// Width and height of the QR grid in modules.
     pub size: usize,
+    /// Error-correction codewords per Reed-Solomon block.
     pub ec_per_block: usize,
+    /// Number of group-1 blocks.
     pub blocks_g1: usize,
+    /// Data codewords in each group-1 block.
     pub data_per_block_g1: usize,
+    /// Number of group-2 blocks.
     pub blocks_g2: usize,
+    /// Data codewords in each group-2 block.
     pub data_per_block_g2: usize,
 }
 
 impl VersionInfo {
+    /// Total number of data codewords available across all blocks.
     pub const fn total_data_codewords(&self) -> usize {
         self.blocks_g1 * self.data_per_block_g1 + self.blocks_g2 * self.data_per_block_g2
     }
 
+    /// Total number of Reed-Solomon blocks.
     pub const fn total_blocks(&self) -> usize {
         self.blocks_g1 + self.blocks_g2
     }
