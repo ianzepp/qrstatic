@@ -4,7 +4,9 @@ Zero-dependency Rust crate for steganographic QR codes hidden in accumulated noi
 
 ## Core Concept
 
-Each frame looks like random static. Accumulate N frames and a QR code emerges from the noise.
+Each frame looks like random static. Accumulate N frames and a QR code is revealed in the accumulated field.
+
+Terminology note: "revealed", "recovered", and similar phrases in this README refer to decoder-side accumulation and thresholding. The QR is latent in the carrier sequence; it is not expected to become visibly readable in the raw static stream itself.
 
 ```
 Frame 1        Frame 2        Frame 3           Frame N
@@ -17,13 +19,13 @@ Frame 1        Frame 2        Frame 3           Frame N
                            ███████████████
                            ██ ▒▒▒▒▒▒▒ ▒██
                            ██ ██████▒ ▒██
-                           ██ ██████▒ ▒██    ← QR code emerges!
+                           ██ ██████▒ ▒██    ← QR revealed after accumulation
                            ██ ██████▒ ▒██
                            ██ ▒▒▒▒▒▒▒ ▒██
                            ███████████████
 ```
 
-N is a secret. Wrong N yields garbage. Right N reveals a message — and that message may itself be a key to a deeper layer of steganography hiding in the same data.
+N is a secret. Wrong N yields garbage. Right N reveals a decodable QR in the accumulated field — and that message may itself be a key to a deeper layer of steganography hiding in the same data.
 
 ## Layered Keys
 
@@ -40,12 +42,12 @@ N is a secret. Wrong N yields garbage. Right N reveals a message — and that me
 └──────────┴───────────────────┴──────────────────────────────────────────┘
 ```
 
-Each layer requires the previous layer's key. An attacker who doesn't know N sees noise. One who knows N but not the QR meaning sees a QR code but can't decode the magnitude payload. The deeper you go, the more keys you need.
+Each layer requires the previous layer's key. An attacker who doesn't know N sees noise. One who knows N but not the QR meaning can recover the QR from the accumulated field but still can't decode the magnitude payload. The deeper you go, the more keys you need.
 
 ```mermaid
 graph LR
-    A["Random Noise"] -->|"Know N"| B["QR Code Emerges"]
-    B -->|"Read QR"| C["Visible Message"]
+    A["Random Noise"] -->|"Know N"| B["Recover QR From Accumulation"]
+    B -->|"Read QR"| C["Recovered Message"]
     C -->|"Use as Key"| D["Magnitude Payload"]
     D -->|"Decode L2"| E["Deeper Secret"]
 
@@ -83,7 +85,7 @@ SNR:           1        2        4        8       16    (√N improvement)
                               N frames
 ```
 
-More frames = cleaner QR emergence = more reliable decoding.
+More frames = cleaner accumulated QR signal = more reliable decoding.
 
 ## Codec Families
 
@@ -144,7 +146,7 @@ The simplest approach. Each frame is binary (0 or 1). XOR all frames to recover 
   │█░█░█░█│     │░░█░░█░│         │█░░░█░█│             ↓
   └───────┘     └───────┘         └───────┘        ┌───────┐
                 Frame 1..N-1       Frame N         │█░█░█░█│
-                (random)          (computed)       │░█████░│  ← QR!
+                (random)          (computed)       │░█████░│  ← recovered QR grid
                                                    │█░█░█░█│
   Frame N = QR ⊕ Frame₁ ⊕ ... ⊕ Frame_{N-1}        └───────┘
 ```
@@ -168,7 +170,7 @@ assert_eq!(result.message.as_deref(), Some("Hello, world!"));
 
 ### 2. Signed — Signed Accumulation
 
-Frames contain ±1 carrier values. Accumulate them: the sign reveals QR modules, the magnitude encodes payload via expected-noise reconstruction.
+Frames contain ±1 carrier values. Accumulate them: the sign pattern in the accumulated grid reveals QR modules, while the magnitude encodes payload via expected-noise reconstruction.
 
 ```
    Frame 1         Frame 2         Frame N        Accumulated
@@ -178,7 +180,7 @@ Frames contain ±1 carrier values. Accumulate them: the sign reveals QR modules,
   │+1 -1 +1 │     │-1 +1 -1 │     │+1 -1 +1 │     │+3  -N  +N│
   └─────────┘     └─────────┘     └─────────┘     └─────────┘
 
-                    Sign → QR pattern
+                    Accumulated sign → QR pattern
                     Magnitude deviation → payload bits
 ```
 
@@ -202,7 +204,7 @@ assert_eq!(result.payload.as_deref(), Some(&b"hidden payload"[..]));
 
 ### 3. Binary — Binary Static
 
-The most memory-efficient approach. Each frame is pure binary static — just +1 or -1, like real TV snow. Grayscale emerges from temporal accumulation, not per-frame values.
+The most memory-efficient approach. Each frame is pure binary static — just +1 or -1, like real TV snow. Grayscale is recovered from temporal accumulation, not from per-frame values.
 
 ```
                          BINARY STATIC
@@ -213,8 +215,8 @@ The most memory-efficient approach. Each frame is pure binary static — just +1
     │-1 +1 -1 -1 +1 -1 +1 -1  │     │-30 +22 -26 -34 +28 -24  │
     │+1 -1 +1 +1 -1 +1 -1 +1  │     │+18 -32 +30 +24 -20 +36  │
     └──────────────────────────┘     └──────────────────────────┘
-    Looks like random noise          QR pattern in the signs
-    (1 value per pixel)              Payload in the magnitudes
+    Looks like random noise          Accumulated sign carries QR
+    (1 value per pixel)              Accumulated magnitude carries payload
 ```
 
 #### Encoding via Probability Bias
@@ -222,8 +224,8 @@ The most memory-efficient approach. Each frame is pure binary static — just +1
 Instead of storing a target value, we bias the probability of +1 vs -1:
 
 ```
-White QR module:  P(+1) = 0.8    →  trends positive over N frames
-Black QR module:  P(+1) = 0.2    →  trends negative over N frames
+White QR module:  P(+1) = 0.8    →  accumulated sum trends positive
+Black QR module:  P(+1) = 0.2    →  accumulated sum trends negative
 
 After N=60 frames:
   White pixel: expected sum = 60 × (0.8 - 0.2) = +36
@@ -273,14 +275,14 @@ Frames contain continuous float values. Signal accumulates linearly while noise 
 
 #### Dual-Channel Encoding
 
-The QR emerges from the **sign** of accumulated values. But the **magnitude** (how far from zero) encodes additional data:
+The QR is recovered from the **sign** of accumulated values. But the **magnitude** (how far from zero) encodes additional data:
 
 ```
                     DUAL-CHANNEL ENCODING
 
                       Accumulated Height Field
 
-        Sign reveals QR:              Magnitude hides payload:
+        Sign yields QR after accumulation:  Magnitude hides payload:
 
           + + - - + +                   2.1  2.3  1.8  1.9  2.2  2.0
           + - - - - +                   2.0  1.7  2.1  1.8  1.9  2.2
@@ -311,24 +313,24 @@ assert_eq!(result.payload.as_deref(), Some(&b"hidden payload"[..]));
 
 ### 5. Layered — Two-Layer Recursive
 
-A video within a video. Layer 1 outputs become the "frames" for Layer 2.
+A layered recovery pipeline. Layer 1 accumulated outputs become the "frames" for Layer 2.
 
 ```
                          RECURSIVE STRUCTURE
 
-    Carrier Frames (N₁ = 30)              Layer 1 Output
+    Carrier Frames (N₁ = 30)              Layer 1 Accumulated Output
     ┌──┬──┬──┬──┬──┬──┬──┬──┐            ┌────────────┐
     │▓▒│░▓│█▒│▒░│▓█│░▒│▓░│...│  accumulate  │            │
     └──┴──┴──┴──┴──┴──┴──┴──┘      →     │   QR₁      │
          30 noise frames                  │            │
                                           └────────────┘
 
-    Layer 1 Outputs (N₂ = 30)             Layer 2 Output
+    Layer 1 Accumulated Outputs (N₂ = 30) Layer 2 Output
     ┌────┬────┬────┬────┬────┐           ┌────────────┐
     │QR₁ │QR₁ │QR₁ │QR₁ │... │  accumulate  │            │
     │out₁│out₂│out₃│out₄│    │      →     │ QR₂ + data │
     └────┴────┴────┴────┴────┘           │            │
-         30 L1 outputs                    └────────────┘
+         30 L1 accumulated outputs        └────────────┘
 
     Total: 30 × 30 = 900 carrier frames per L2 output
 ```
@@ -341,7 +343,7 @@ graph LR
         FN["Frame 30"] --> ACC1
     end
 
-    ACC1 --> L1["L1 Output: QR₁"]
+    ACC1 --> L1["L1 Output: recovered QR₁"]
 
     subgraph "Layer 2 (N₂ = 30 L1 outputs)"
         L1a["L1 Output 1"] --> ACC2["Accumulate"]
@@ -349,7 +351,7 @@ graph LR
         L1n["L1 Output 30"] --> ACC2
     end
 
-    ACC2 --> L2["L2 Output: QR₂ + Payload"]
+    ACC2 --> L2["L2 Output: recovered QR₂ + payload"]
 ```
 
 #### Four Secrets Required
@@ -409,7 +411,7 @@ The most sophisticated approach. Overlapping windows create smooth carrier with 
     Window B: frames 30-89     ─┘─┬─ 30 frames overlap (50%)
     Window C: frames 60-119       ─┘
 
-    Each window decodes to the same QR.
+    Each window recovers the same QR after accumulation.
     Decoder can lock on at ANY frame — no fixed boundaries to detect.
 ```
 
@@ -452,7 +454,7 @@ assert_eq!(result.layer2_message.as_deref(), Some("hidden-qr"));
 
 ### 7. Audio — Audio Steganography
 
-Maps audio samples into virtual 2D frames and recovers QR from accumulated sign bias. The encoded audio sounds identical to the cover — only the statistical distribution of sample signs is shifted.
+Maps audio samples into virtual 2D frames and recovers QR from accumulated sign bias. The encoded audio sounds identical to the cover; only the statistical distribution of sample signs is shifted.
 
 ```
                          AUDIO ENCODING
@@ -469,12 +471,12 @@ Maps audio samples into virtual 2D frames and recovers QR from accumulated sign 
                     ↓ accumulate N frames of samples ↓
 
               sample_index % frame_size → virtual (row, col)
-              Sign of accumulated value → QR module
+              Sign of accumulated value → recovered QR module
 
                            ███████████████
                            ██ ▒▒▒▒▒▒▒ ▒██
                            ██ ██████▒ ▒██
-                           ██ ██████▒ ▒██    ← QR emerges from audio!
+                           ██ ██████▒ ▒██    ← QR recovered from accumulated audio window
                            ██ ██████▒ ▒██
                            ██ ▒▒▒▒▒▒▒ ▒██
                            ███████████████
@@ -486,7 +488,7 @@ graph LR
     B --> C["Encoded Audio"]
     C --> D["Map to Virtual 2D Grid"]
     D --> E["Accumulate N Frames"]
-    E --> F["QR from Sign Pattern"]
+    E --> F["Recover QR from Sign Pattern"]
 ```
 
 **Properties:** Works on audio waveforms, imperceptible modification, virtual 2D mapping from 1D samples.

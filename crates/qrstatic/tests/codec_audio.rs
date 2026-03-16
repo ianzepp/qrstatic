@@ -74,7 +74,7 @@ fn streaming_chunk_based() {
 }
 
 #[test]
-fn qr_emerges_after_n_frames_of_samples() {
+fn qr_is_recoverable_after_n_frames_of_samples() {
     let config = AudioConfig::new(60, 64 * 64, 0.4, "emerge-seed");
     let cover = synthetic_noise(config.n_frames * config.frame_size, "cover");
     let mut encoder = AudioStreamEncoder::new(config.clone(), "emerge-key").unwrap();
@@ -93,5 +93,5 @@ fn qr_emerges_after_n_frames_of_samples() {
         }
     }
 
-    panic!("audio QR did not emerge after full sample window");
+    panic!("audio QR was not recoverable after the full sample window");
 }

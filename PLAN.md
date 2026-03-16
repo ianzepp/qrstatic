@@ -200,7 +200,7 @@ N1 frames per L1 output, N2 L1 outputs per L2 output. Hierarchical steganography
 Status: complete.
 
 Validation notes:
-- L1 uses deterministic analog carrier frames whose accumulated sign reveals QR1 every `n1` frames.
+- L1 uses deterministic analog carrier frames whose accumulated sign yields QR1 every `n1` frames.
 - L2 is reconstructed from QR1-aligned magnitude deviations across `n2` L1 outputs with deterministic noise cancellation.
 - QR2 is recovered from the sign of the L2 deviation field, and payload from QR2-aligned magnitude votes.
 - Batch roundtrips, the 30×30 default window, and streaming L1/L2 cadence are covered.
@@ -255,7 +255,7 @@ Validation notes:
 - Roundtrip with synthetic samples.
 - Different frame sizes (4096 default).
 - Streaming: sample-by-sample and chunk-based.
-- QR emerges after N frames of samples.
+- QR is recoverable from the accumulated sample window after N frames.
 
 ### Phase 10 — Polish
 
