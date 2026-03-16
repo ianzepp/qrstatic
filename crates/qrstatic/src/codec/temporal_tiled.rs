@@ -2,50 +2,120 @@ use crate::codec::temporal::{
     TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder,
 };
 use crate::codec::temporal_packet::{
-    TemporalPacketProfile, invert_matrix, systematic_generator_rows,
+    TemporalPacketProfile, crc32, invert_matrix, systematic_generator_rows,
 };
 use crate::prng::Prng;
 use crate::qr::encode::version_for_number;
 use crate::qr::gf256;
 use crate::{Grid, Result};
 
-// ── Hex utilities ──────────────────────────────────────────────────────
+// ── Base64url utilities ────────────────────────────────────────────────
 
-const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+const BASE64URL_CHARS: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const PAYLOAD_LEN_SIZE: usize = 4; // u32 LE logical payload length
 
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(HEX_CHARS[(b >> 4) as usize] as char);
-        s.push(HEX_CHARS[(b & 0x0f) as usize] as char);
+fn base64url_encoded_len(raw_len: usize) -> usize {
+    let full_chunks = raw_len / 3;
+    let remainder = raw_len % 3;
+    full_chunks * 4
+        + match remainder {
+            0 => 0,
+            1 => 2,
+            2 => 3,
+            _ => 0,
+        }
+}
+
+fn base64url_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(base64url_encoded_len(bytes.len()));
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        let chunk =
+            ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
+        s.push(BASE64URL_CHARS[((chunk >> 18) & 0x3f) as usize] as char);
+        s.push(BASE64URL_CHARS[((chunk >> 12) & 0x3f) as usize] as char);
+        s.push(BASE64URL_CHARS[((chunk >> 6) & 0x3f) as usize] as char);
+        s.push(BASE64URL_CHARS[(chunk & 0x3f) as usize] as char);
+        i += 3;
     }
+
+    match bytes.len() - i {
+        1 => {
+            let chunk = (bytes[i] as u32) << 16;
+            s.push(BASE64URL_CHARS[((chunk >> 18) & 0x3f) as usize] as char);
+            s.push(BASE64URL_CHARS[((chunk >> 12) & 0x3f) as usize] as char);
+        }
+        2 => {
+            let chunk = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8);
+            s.push(BASE64URL_CHARS[((chunk >> 18) & 0x3f) as usize] as char);
+            s.push(BASE64URL_CHARS[((chunk >> 12) & 0x3f) as usize] as char);
+            s.push(BASE64URL_CHARS[((chunk >> 6) & 0x3f) as usize] as char);
+        }
+        _ => {}
+    }
+
     s
 }
 
-fn hex_decode(s: &str) -> Result<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
+fn base64url_decode(s: &str) -> Result<Vec<u8>> {
+    if s.len() % 4 == 1 {
         return Err(crate::Error::Codec(
-            "hex string must have even length".into(),
+            "base64url string has invalid length".into(),
         ));
     }
-    let mut out = Vec::with_capacity(s.len() / 2);
+
+    let mut out = Vec::with_capacity((s.len() * 3) / 4);
     let bytes = s.as_bytes();
-    for i in (0..bytes.len()).step_by(2) {
-        let hi = hex_nibble(bytes[i])?;
-        let lo = hex_nibble(bytes[i + 1])?;
-        out.push((hi << 4) | lo);
+    let mut i = 0usize;
+
+    while i + 4 <= bytes.len() {
+        let a = base64url_value(bytes[i])? as u32;
+        let b = base64url_value(bytes[i + 1])? as u32;
+        let c = base64url_value(bytes[i + 2])? as u32;
+        let d = base64url_value(bytes[i + 3])? as u32;
+        let chunk = (a << 18) | (b << 12) | (c << 6) | d;
+        out.push(((chunk >> 16) & 0xff) as u8);
+        out.push(((chunk >> 8) & 0xff) as u8);
+        out.push((chunk & 0xff) as u8);
+        i += 4;
     }
+
+    match bytes.len() - i {
+        0 => {}
+        2 => {
+            let a = base64url_value(bytes[i])? as u32;
+            let b = base64url_value(bytes[i + 1])? as u32;
+            let chunk = (a << 18) | (b << 12);
+            out.push(((chunk >> 16) & 0xff) as u8);
+        }
+        3 => {
+            let a = base64url_value(bytes[i])? as u32;
+            let b = base64url_value(bytes[i + 1])? as u32;
+            let c = base64url_value(bytes[i + 2])? as u32;
+            let chunk = (a << 18) | (b << 12) | (c << 6);
+            out.push(((chunk >> 16) & 0xff) as u8);
+            out.push(((chunk >> 8) & 0xff) as u8);
+        }
+        _ => {
+            return Err(crate::Error::Codec(
+                "base64url string has invalid trailing length".into(),
+            ));
+        }
+    }
+
     Ok(out)
 }
 
-fn hex_nibble(b: u8) -> Result<u8> {
+fn base64url_value(b: u8) -> Result<u8> {
     match b {
-        b'0'..=b'9' => Ok(b - b'0'),
-        b'a'..=b'f' => Ok(b - b'a' + 10),
-        b'A'..=b'F' => Ok(b - b'A' + 10),
+        b'A'..=b'Z' => Ok(b - b'A'),
+        b'a'..=b'z' => Ok(b - b'a' + 26),
+        b'0'..=b'9' => Ok(b - b'0' + 52),
+        b'-' => Ok(62),
+        b'_' => Ok(63),
         _ => Err(crate::Error::Codec(format!(
-            "invalid hex char: {}",
+            "invalid base64url char: {}",
             b as char
         ))),
     }
@@ -53,18 +123,23 @@ fn hex_nibble(b: u8) -> Result<u8> {
 
 // ── Tile payload header ────────────────────────────────────────────────
 
-const TILE_HEADER_SIZE: usize = 3; // group_id: u16 LE + shard_id: u8
+const TILE_HEADER_SIZE: usize = 5; // group_id: u16 LE + shard_id: u8 + shard_crc16: u16 LE
+
+fn shard_crc16(bytes: &[u8]) -> u16 {
+    (crc32(bytes) & 0xffff) as u16
+}
 
 fn encode_tile_payload(group_id: u16, shard_id: u8, shard_data: &[u8]) -> String {
     let mut raw = Vec::with_capacity(TILE_HEADER_SIZE + shard_data.len());
     raw.extend_from_slice(&group_id.to_le_bytes());
     raw.push(shard_id);
+    raw.extend_from_slice(&shard_crc16(shard_data).to_le_bytes());
     raw.extend_from_slice(shard_data);
-    hex_encode(&raw)
+    base64url_encode(&raw)
 }
 
-fn decode_tile_payload(hex_str: &str) -> Result<(u16, u8, Vec<u8>)> {
-    let raw = hex_decode(hex_str)?;
+fn decode_tile_payload(encoded: &str) -> Result<(u16, u8, Vec<u8>)> {
+    let raw = base64url_decode(encoded)?;
     if raw.len() < TILE_HEADER_SIZE {
         return Err(crate::Error::Codec(
             "tile payload too short for header".into(),
@@ -72,7 +147,14 @@ fn decode_tile_payload(hex_str: &str) -> Result<(u16, u8, Vec<u8>)> {
     }
     let group_id = u16::from_le_bytes([raw[0], raw[1]]);
     let shard_id = raw[2];
+    let expected_crc = u16::from_le_bytes([raw[3], raw[4]]);
     let shard_data = raw[TILE_HEADER_SIZE..].to_vec();
+    let actual_crc = shard_crc16(&shard_data);
+    if actual_crc != expected_crc {
+        return Err(crate::Error::Codec(format!(
+            "tile shard CRC mismatch: expected {expected_crc:#06x}, got {actual_crc:#06x}"
+        )));
+    }
     Ok((group_id, shard_id, shard_data))
 }
 
@@ -204,10 +286,11 @@ fn compute_layout(config: &TiledConfig) -> Result<TiledLayout> {
     // Compute shard data capacity per tile.
     // QR capacity in bytes (byte-mode): total_data_codewords - 2 (mode + char count overhead)
     let qr_capacity_bytes = version_info.total_data_codewords().saturating_sub(2);
-    // Hex encoding doubles size, plus TILE_HEADER_SIZE raw bytes of header.
-    // hex_string_len = 2 * (TILE_HEADER_SIZE + shard_data_bytes) <= qr_capacity_bytes
-    // shard_data_bytes = (qr_capacity_bytes / 2) - TILE_HEADER_SIZE
-    let shard_data_bytes = (qr_capacity_bytes / 2).saturating_sub(TILE_HEADER_SIZE);
+    // Base64url expands raw bytes to ceil(4n/3) chars without padding.
+    let mut shard_data_bytes = 0usize;
+    while base64url_encoded_len(TILE_HEADER_SIZE + shard_data_bytes + 1) <= qr_capacity_bytes {
+        shard_data_bytes += 1;
+    }
 
     let raw_payload_capacity = n_groups * config.data_shards * shard_data_bytes;
     let max_payload_bytes = raw_payload_capacity.saturating_sub(PAYLOAD_LEN_SIZE);
@@ -753,23 +836,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hex_roundtrip() {
+    fn base64url_roundtrip() {
         let data = b"hello world";
-        let encoded = hex_encode(data);
-        assert_eq!(encoded, "68656c6c6f20776f726c64");
-        let decoded = hex_decode(&encoded).unwrap();
+        let encoded = base64url_encode(data);
+        assert_eq!(encoded, "aGVsbG8gd29ybGQ");
+        let decoded = base64url_decode(&encoded).unwrap();
         assert_eq!(decoded, data);
     }
 
     #[test]
-    fn hex_empty() {
-        assert_eq!(hex_encode(&[]), "");
-        assert_eq!(hex_decode("").unwrap(), Vec::<u8>::new());
+    fn base64url_empty() {
+        assert_eq!(base64url_encode(&[]), "");
+        assert_eq!(base64url_decode("").unwrap(), Vec::<u8>::new());
     }
 
     #[test]
-    fn hex_odd_length_fails() {
-        assert!(hex_decode("abc").is_err());
+    fn base64url_invalid_length_fails() {
+        assert!(base64url_decode("a").is_err());
+    }
+
+    #[test]
+    fn base64url_invalid_char_fails() {
+        assert!(base64url_decode("%A").is_err());
     }
 
     #[test]
@@ -795,8 +883,8 @@ mod tests {
         assert_eq!(layout.group_size, 5);
         assert_eq!(layout.n_groups, 653);
         assert_eq!(layout.active_tiles, 3265);
-        assert_eq!(layout.shard_data_bytes, 4);
-        assert_eq!(layout.max_payload_bytes, 653 * 3 * 4 - PAYLOAD_LEN_SIZE); // 7832
+        assert_eq!(layout.shard_data_bytes, 5);
+        assert_eq!(layout.max_payload_bytes, 653 * 3 * 5 - PAYLOAD_LEN_SIZE); // 9791
     }
 
     #[test]
@@ -810,8 +898,8 @@ mod tests {
         assert_eq!(layout.group_size, 3);
         assert_eq!(layout.n_groups, 5);
         assert_eq!(layout.active_tiles, 15);
-        assert_eq!(layout.shard_data_bytes, 4); // v2: (14/2) - 3 = 4
-        assert_eq!(layout.max_payload_bytes, 5 * 2 * 4 - PAYLOAD_LEN_SIZE);
+        assert_eq!(layout.shard_data_bytes, 5); // base64url: 5-byte header + 5-byte shard = 10 raw => 14 chars
+        assert_eq!(layout.max_payload_bytes, 5 * 2 * 5 - PAYLOAD_LEN_SIZE);
     }
 
     #[test]
@@ -897,10 +985,20 @@ mod tests {
     }
 
     #[test]
+    fn tile_payload_crc_rejects_corruption() {
+        let encoded = encode_tile_payload(7, 2, b"hello");
+        let mut corrupted = encoded.into_bytes();
+        let last = corrupted.len() - 1;
+        corrupted[last] = if corrupted[last] == b'A' { b'B' } else { b'A' };
+        let corrupted = String::from_utf8(corrupted).unwrap();
+        assert!(decode_tile_payload(&corrupted).is_err());
+    }
+
+    #[test]
     fn small_encode_decode_roundtrip() {
         // 75x75 video, QR v2 (25x25) = 3x3 = 9 tiles
         // RS: 2 data + 1 parity = 3 per group → 3 groups
-        // shard_data_bytes = 4, so max_payload = 3 * 2 * 4 = 24 bytes
+        // shard_data_bytes = 5 with base64url tile payloads and CRC16 headers
         // Use proven temporal baseline: 64 frames, 0.42/0.22 amplitudes
         let config = TiledConfig::new((75, 75), 2, 64, 0.42, 0.22, 2, 1).unwrap();
         let master_key = "test-tiled";
@@ -910,7 +1008,7 @@ mod tests {
         assert_eq!(layout.tiles_x, 3);
         assert_eq!(layout.tiles_y, 3);
         assert_eq!(layout.n_groups, 3);
-        assert_eq!(layout.shard_data_bytes, 4);
+        assert_eq!(layout.shard_data_bytes, 5);
 
         // Create a payload that fits
         let payload: Vec<u8> = (0..layout.max_payload_bytes)
