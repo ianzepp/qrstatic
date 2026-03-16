@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
+use qrstatic::Grid;
 use qrstatic::codec::temporal::{
     TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, naive_field,
     try_extract_qr,
 };
-use qrstatic::Grid;
 
 const MAX_WINDOW_HISTORY: usize = 24;
 const MAX_LAYER2_SAMPLES: usize = 512;
@@ -122,8 +122,7 @@ impl Args {
                     parsed.height = parse_usize(&next_value(&mut args, "--height")?, "--height")?
                 }
                 "--frames" => {
-                    parsed.n_frames =
-                        parse_usize(&next_value(&mut args, "--frames")?, "--frames")?
+                    parsed.n_frames = parse_usize(&next_value(&mut args, "--frames")?, "--frames")?
                 }
                 "--stream-windows" => {
                     parsed.stream_windows = parse_usize(
@@ -138,14 +137,10 @@ impl Args {
                     )?
                 }
                 "--l1-amplitude" => {
-                    parsed.l1_amplitude = parse_f32(
-                        &next_value(&mut args, "--l1-amplitude")?,
-                        "--l1-amplitude",
-                    )?
+                    parsed.l1_amplitude =
+                        parse_f32(&next_value(&mut args, "--l1-amplitude")?, "--l1-amplitude")?
                 }
-                "--fps" => {
-                    parsed.fps = parse_f32(&next_value(&mut args, "--fps")?, "--fps")?
-                }
+                "--fps" => parsed.fps = parse_f32(&next_value(&mut args, "--fps")?, "--fps")?,
                 "--help" | "-h" => return Err(help_text()),
                 other => return Err(format!("unknown flag: {other}\n\n{}", help_text())),
             }

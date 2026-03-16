@@ -10,13 +10,11 @@ mod theme;
 mod ui;
 
 fn main() -> io::Result<()> {
-    let args = state::Args::parse(env::args().skip(1)).map_err(|msg| {
-        io::Error::new(io::ErrorKind::InvalidInput, msg)
-    })?;
+    let args = state::Args::parse(env::args().skip(1))
+        .map_err(|msg| io::Error::new(io::ErrorKind::InvalidInput, msg))?;
 
-    let mut app = state::AppState::new(args).map_err(|msg| {
-        io::Error::new(io::ErrorKind::Other, msg)
-    })?;
+    let mut app =
+        state::AppState::new(args).map_err(|msg| io::Error::new(io::ErrorKind::Other, msg))?;
 
     // Bootstrap the first frame
     app.advance();

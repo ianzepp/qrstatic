@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use crate::state::{AppState, map_symmetric_to_u8};
 use crate::theme;
@@ -26,13 +26,13 @@ fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     let width = area.width as usize;
 
     let title = " qrstatic debug ";
-    let play_state = if state.is_playing { "playing" } else { "paused" };
+    let play_state = if state.is_playing {
+        "playing"
+    } else {
+        "paused"
+    };
 
-    let shortcuts = [
-        ("Space", "Play/Pause"),
-        ("N", "Step"),
-        ("Q", "Quit"),
-    ];
+    let shortcuts = [("Space", "Play/Pause"), ("N", "Step"), ("Q", "Quit")];
 
     let mut right_spans: Vec<Span> = Vec::new();
     for (key, label) in &shortcuts {
@@ -61,10 +61,7 @@ fn render_header_bar(frame: &mut Frame, area: Rect, state: &AppState) {
                 .bg(theme::HEADER_BG)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            " ".repeat(gap),
-            Style::default().bg(theme::HEADER_BG),
-        ),
+        Span::styled(" ".repeat(gap), Style::default().bg(theme::HEADER_BG)),
     ];
     spans.extend(right_spans);
 
@@ -81,7 +78,7 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
         Constraint::Length(1),           // L1 title
         Constraint::Length(1),           // L1 content
         Constraint::Length(1),           // L2 title
-        Constraint::Min(3),             // L2 hex dump (fills remaining)
+        Constraint::Min(3),              // L2 hex dump (fills remaining)
     ])
     .split(area);
 
@@ -94,15 +91,24 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
     .split(vertical[0]);
 
     frame.render_widget(
-        Line::from(Span::styled(" Raw Stream", Style::default().fg(theme::LABEL))),
+        Line::from(Span::styled(
+            " Raw Stream",
+            Style::default().fg(theme::LABEL),
+        )),
         title_cols[0],
     );
     frame.render_widget(
-        Line::from(Span::styled(" Correlation", Style::default().fg(theme::LABEL))),
+        Line::from(Span::styled(
+            " Correlation",
+            Style::default().fg(theme::LABEL),
+        )),
         title_cols[1],
     );
     frame.render_widget(
-        Line::from(Span::styled(" QR Decode", Style::default().fg(theme::LABEL))),
+        Line::from(Span::styled(
+            " QR Decode",
+            Style::default().fg(theme::LABEL),
+        )),
         title_cols[2],
     );
 
@@ -120,7 +126,10 @@ fn render_content(frame: &mut Frame, area: Rect, state: &AppState) {
 
     // L1 track
     frame.render_widget(
-        Line::from(Span::styled(" L1 Decode", Style::default().fg(theme::LABEL))),
+        Line::from(Span::styled(
+            " L1 Decode",
+            Style::default().fg(theme::LABEL),
+        )),
         vertical[2],
     );
     render_layer1_track(frame, vertical[3], state);
@@ -192,40 +201,30 @@ fn render_qr_decode(frame: &mut Frame, area: Rect, state: &AppState) {
     match &state.last_qr_decode {
         Some(qr) => {
             lines.push(Line::from(vec![
-                Span::styled(
-                    " window   ",
-                    Style::default().fg(theme::LABEL),
-                ),
+                Span::styled(" window   ", Style::default().fg(theme::LABEL)),
                 Span::styled(
                     format!("W{:02}", qr.window_number),
                     Style::default().fg(theme::GREEN),
                 ),
             ]));
             lines.push(Line::from(vec![
-                Span::styled(
-                    " score    ",
-                    Style::default().fg(theme::LABEL),
-                ),
+                Span::styled(" score    ", Style::default().fg(theme::LABEL)),
                 Span::styled(
                     format!("{:.2}", qr.detector_score),
                     Style::default().fg(theme::GREEN),
                 ),
             ]));
             lines.push(Line::from(vec![
-                Span::styled(
-                    " key      ",
-                    Style::default().fg(theme::LABEL),
-                ),
+                Span::styled(" key      ", Style::default().fg(theme::LABEL)),
                 Span::raw(&qr.key),
             ]));
             lines.push(Line::from(vec![
-                Span::styled(
-                    " message  ",
-                    Style::default().fg(theme::LABEL),
-                ),
+                Span::styled(" message  ", Style::default().fg(theme::LABEL)),
                 Span::styled(
                     &qr.message,
-                    Style::default().fg(theme::GREEN).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme::GREEN)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
         }
@@ -262,9 +261,7 @@ fn render_layer1_track(frame: &mut Frame, area: Rect, state: &AppState) {
     let fi = state.frame_index;
     let nf = state.config.n_frames;
     let filled = (fi * 5) / nf;
-    let bar: String = (0..5)
-        .map(|i| if i < filled { '█' } else { '░' })
-        .collect();
+    let bar: String = (0..5).map(|i| if i < filled { '█' } else { '░' }).collect();
     spans.push(Span::styled(
         format!("W{:02} ", wn),
         Style::default().fg(theme::CYAN),
@@ -345,7 +342,13 @@ fn render_hex_dump(frame: &mut Frame, area: Rect, state: &AppState) {
         spans.push(Span::styled(" ", Style::default()));
         let ascii: String = row_bytes
             .iter()
-            .map(|&b| if (0x20..=0x7e).contains(&b) { b as char } else { '.' })
+            .map(|&b| {
+                if (0x20..=0x7e).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         spans.push(Span::styled(ascii, Style::default().fg(theme::GREEN)));
 
@@ -371,10 +374,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 
     let left_spans = vec![
         Span::styled(format!(" {play_indicator} "), style),
-        Span::styled(
-            format!("frame {}/{}", s.display_frame, c.n_frames),
-            style,
-        ),
+        Span::styled(format!("frame {}/{}", s.display_frame, c.n_frames), style),
         sep.clone(),
         Span::styled(format!("stream {}", s.stream_position), style),
         sep.clone(),
@@ -392,25 +392,23 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
             },
         ),
         sep.clone(),
-        Span::styled(
-            format!("{} bytes", state.decoded_bytes.len()),
-            style,
-        ),
+        Span::styled(format!("{} bytes", state.decoded_bytes.len()), style),
     ];
 
-    let right_spans = vec![
-        Span::styled(
-            format!("noise {:.2}  l1 {:.2} ", c.noise_amplitude, c.l1_amplitude),
-            dim,
-        ),
-    ];
+    let right_spans = vec![Span::styled(
+        format!("noise {:.2}  l1 {:.2} ", c.noise_amplitude, c.l1_amplitude),
+        dim,
+    )];
 
     let left_len: usize = left_spans.iter().map(|s| s.width()).sum();
     let right_len: usize = right_spans.iter().map(|s| s.width()).sum();
     let gap = width.saturating_sub(left_len + right_len);
 
     let mut spans = left_spans;
-    spans.push(Span::styled(" ".repeat(gap), Style::default().bg(theme::STATUS_BG)));
+    spans.push(Span::styled(
+        " ".repeat(gap),
+        Style::default().bg(theme::STATUS_BG),
+    ));
     spans.extend(right_spans);
 
     frame.render_widget(Line::from(spans), area);

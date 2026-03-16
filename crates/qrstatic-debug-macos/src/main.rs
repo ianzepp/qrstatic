@@ -2,8 +2,8 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Color32, ColorImage, Context, Frame as UiFrame, Grid as UiGrid, Margin,
-    RichText, ScrollArea, Sense, Stroke, TextureHandle, TextureOptions, Vec2,
+    self, Align, Color32, ColorImage, Context, Frame as UiFrame, Grid as UiGrid, Margin, RichText,
+    ScrollArea, Sense, Stroke, TextureHandle, TextureOptions, Vec2,
 };
 use qrstatic::codec::temporal::{
     TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, naive_field,
@@ -97,8 +97,10 @@ impl Args {
                     parsed.n_frames = parse_usize(&next_value(&mut args, "--frames")?, "--frames")?
                 }
                 "--stream-windows" => {
-                    parsed.stream_windows =
-                        parse_usize(&next_value(&mut args, "--stream-windows")?, "--stream-windows")?
+                    parsed.stream_windows = parse_usize(
+                        &next_value(&mut args, "--stream-windows")?,
+                        "--stream-windows",
+                    )?
                 }
                 "--noise-amplitude" => {
                     parsed.noise_amplitude = parse_f32(
@@ -107,10 +109,8 @@ impl Args {
                     )?
                 }
                 "--l1-amplitude" => {
-                    parsed.l1_amplitude = parse_f32(
-                        &next_value(&mut args, "--l1-amplitude")?,
-                        "--l1-amplitude",
-                    )?
+                    parsed.l1_amplitude =
+                        parse_f32(&next_value(&mut args, "--l1-amplitude")?, "--l1-amplitude")?
                 }
                 "--fps" => parsed.fps = parse_f32(&next_value(&mut args, "--fps")?, "--fps")?,
                 "--help" | "-h" => return Err(help_text()),
@@ -255,8 +255,8 @@ impl DebugViewerApp {
             args.l1_amplitude,
         )
         .map_err(|err| format!("failed to construct temporal config: {err}"))?;
-        let encoder =
-            TemporalEncoder::new(config.clone()).map_err(|err| format!("failed to construct temporal encoder: {err}"))?;
+        let encoder = TemporalEncoder::new(config.clone())
+            .map_err(|err| format!("failed to construct temporal encoder: {err}"))?;
         let stream_windows = build_stream_windows(&encoder, &args)
             .map_err(|err| format!("failed to generate temporal debug stream: {err}"))?;
 
@@ -328,9 +328,12 @@ impl DebugViewerApp {
         }
 
         self.frame_index += 1;
-        self.correlation_field =
-            compute_correlation_prefix(self.current_window(), &self.config, &self.current_frames()[..self.frame_index])
-                .unwrap_or_else(|_| Grid::new(self.config.width, self.config.height));
+        self.correlation_field = compute_correlation_prefix(
+            self.current_window(),
+            &self.config,
+            &self.current_frames()[..self.frame_index],
+        )
+        .unwrap_or_else(|_| Grid::new(self.config.width, self.config.height));
         self.stats = compute_stats(
             self.current_window(),
             &self.config,
@@ -348,7 +351,10 @@ impl DebugViewerApp {
     }
 
     fn current_frame(&self) -> &Grid<f32> {
-        let index = self.frame_index.saturating_sub(1).min(self.current_frames().len() - 1);
+        let index = self
+            .frame_index
+            .saturating_sub(1)
+            .min(self.current_frames().len() - 1);
         &self.current_frames()[index]
     }
 
@@ -449,7 +455,8 @@ impl eframe::App for DebugViewerApp {
                 let top_height = (available.y * 0.50).max(240.0);
 
                 ui.horizontal_top(|ui| {
-                    let video_size = Vec2::new((available.x - stats_width - 12.0).max(320.0), top_height);
+                    let video_size =
+                        Vec2::new((available.x - stats_width - 12.0).max(320.0), top_height);
                     draw_video_panel(
                         ui,
                         self.raw_texture.as_ref(),
@@ -471,23 +478,21 @@ impl eframe::App for DebugViewerApp {
                 });
 
                 ui.add_space(8.0);
-                ScrollArea::vertical().id_salt("bottom-tracks").show(ui, |ui| {
-                    draw_layer1_track(
-                        ui,
-                        &self.layer1_windows,
-                        self.active_window_texture.as_ref(),
-                        self.current_window_number(),
-                        self.frame_index,
-                        self.config.n_frames,
-                        self.stats.decoded_message.as_deref(),
-                    );
-                    ui.add_space(8.0);
-                    draw_layer2_track(
-                        ui,
-                        &self.layer2_samples,
-                        self.config.n_frames,
-                    );
-                });
+                ScrollArea::vertical()
+                    .id_salt("bottom-tracks")
+                    .show(ui, |ui| {
+                        draw_layer1_track(
+                            ui,
+                            &self.layer1_windows,
+                            self.active_window_texture.as_ref(),
+                            self.current_window_number(),
+                            self.frame_index,
+                            self.config.n_frames,
+                            self.stats.decoded_message.as_deref(),
+                        );
+                        ui.add_space(8.0);
+                        draw_layer2_track(ui, &self.layer2_samples, self.config.n_frames);
+                    });
             });
         });
     }
@@ -534,61 +539,58 @@ fn draw_layer1_track(
     active_decode: Option<&str>,
 ) {
     panel_frame().show(ui, |ui| {
-    ui.label(RichText::new("Layer 1 Decode Track").strong());
-    ScrollArea::horizontal().id_salt("layer1-track").show(ui, |ui| {
-        ui.horizontal(|ui| {
-            for thumb in completed_windows {
-                ui.vertical(|ui| {
-                    ui.set_max_width(60.0);
-                    ui.label(RichText::new(format!("W{:02}", thumb.window_number)).small());
-                    if let Some(texture) = &thumb.texture {
-                        ui.add(
-                            egui::Image::new(texture)
-                                .fit_to_exact_size(Vec2::splat(56.0))
-                                .sense(Sense::hover()),
-                        );
+        ui.label(RichText::new("Layer 1 Decode Track").strong());
+        ScrollArea::horizontal()
+            .id_salt("layer1-track")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for thumb in completed_windows {
+                        ui.vertical(|ui| {
+                            ui.set_max_width(60.0);
+                            ui.label(RichText::new(format!("W{:02}", thumb.window_number)).small());
+                            if let Some(texture) = &thumb.texture {
+                                ui.add(
+                                    egui::Image::new(texture)
+                                        .fit_to_exact_size(Vec2::splat(56.0))
+                                        .sense(Sense::hover()),
+                                );
+                            }
+                            let msg = thumb.decoded_message.as_deref().unwrap_or(&thumb.key);
+                            let label = truncate_label(msg, 12);
+                            ui.label(RichText::new(label).small().color(Color32::LIGHT_GRAY));
+                        });
+                        ui.add_space(4.0);
                     }
-                    let msg = thumb.decoded_message.as_deref().unwrap_or(&thumb.key);
-                    let label = truncate_label(msg, 12);
-                    ui.label(
-                        RichText::new(label)
-                            .small()
-                            .color(Color32::LIGHT_GRAY),
-                    );
-                });
-                ui.add_space(4.0);
-            }
 
-            ui.vertical(|ui| {
-                ui.set_max_width(60.0);
-                ui.label(
-                    RichText::new(format!("W{:02} {:>2}/{}", active_window_number, active_frame, total_frames))
-                        .small(),
-                );
-                if let Some(texture) = active_texture {
-                    ui.add(
-                        egui::Image::new(texture)
-                            .fit_to_exact_size(Vec2::splat(56.0))
-                            .sense(Sense::hover()),
-                    );
-                }
-                let label = truncate_label(active_decode.unwrap_or("active"), 12);
-                ui.label(
-                    RichText::new(label)
-                        .small()
-                        .color(Color32::from_rgb(150, 210, 255)),
-                );
+                    ui.vertical(|ui| {
+                        ui.set_max_width(60.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "W{:02} {:>2}/{}",
+                                active_window_number, active_frame, total_frames
+                            ))
+                            .small(),
+                        );
+                        if let Some(texture) = active_texture {
+                            ui.add(
+                                egui::Image::new(texture)
+                                    .fit_to_exact_size(Vec2::splat(56.0))
+                                    .sense(Sense::hover()),
+                            );
+                        }
+                        let label = truncate_label(active_decode.unwrap_or("active"), 12);
+                        ui.label(
+                            RichText::new(label)
+                                .small()
+                                .color(Color32::from_rgb(150, 210, 255)),
+                        );
+                    });
+                });
             });
-        });
-    });
     });
 }
 
-fn draw_layer2_track(
-    ui: &mut egui::Ui,
-    samples: &[f32],
-    n_frames: usize,
-) {
+fn draw_layer2_track(ui: &mut egui::Ui, samples: &[f32], n_frames: usize) {
     panel_frame().show(ui, |ui| {
         ui.label(RichText::new("Layer 2 Data Track").strong());
         let desired_size = Vec2::new(ui.available_width(), 100.0);
@@ -596,10 +598,7 @@ fn draw_layer2_track(
 
         if !samples.is_empty() {
             let painter = ui.painter_at(rect);
-            let max_mag = samples
-                .iter()
-                .map(|value| value.abs())
-                .fold(1e-6, f32::max);
+            let max_mag = samples.iter().map(|value| value.abs()).fold(1e-6, f32::max);
             let mid_y = rect.center().y;
             let to_screen = |index: usize, value: f32| {
                 let x = if n_frames <= 1 {
@@ -614,7 +613,10 @@ fn draw_layer2_track(
             };
 
             painter.line_segment(
-                [egui::pos2(rect.left(), mid_y), egui::pos2(rect.right(), mid_y)],
+                [
+                    egui::pos2(rect.left(), mid_y),
+                    egui::pos2(rect.right(), mid_y),
+                ],
                 Stroke::new(1.0, Color32::from_gray(50)),
             );
 
@@ -656,62 +658,74 @@ fn draw_stats(
     last_tick: &mut Instant,
 ) {
     panel_frame().show(ui, |ui| {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Temporal Stats").strong());
-        let label = if *is_playing { "Pause" } else { "Play" };
-        if ui.button(label).clicked() {
-            *is_playing = !*is_playing;
-            *last_tick = Instant::now();
-        }
-    });
-
-    UiGrid::new("stats-grid")
-        .num_columns(2)
-        .spacing([8.0, 1.0])
-        .show(ui, |ui| {
-            stat_row(ui, "state", if *is_playing { "playing" } else { "paused" });
-            stat_row(ui, "frame", &format!("{}/{}", stats.display_frame, config.n_frames));
-            stat_row(ui, "window", &stats.window_number.to_string());
-            stat_row(ui, "stream", &stats.stream_position.to_string());
-            stat_row(
-                ui,
-                "naive",
-                &format!("{:.2} .. {:.2}", stats.naive_min, stats.naive_max),
-            );
-            stat_row(ui, "naive |x|", &format!("{:.2}", stats.naive_mean_abs));
-            stat_row(
-                ui,
-                "corr",
-                &format!("{:.2} .. {:.2}", stats.corr_min, stats.corr_max),
-            );
-            stat_row(ui, "corr |x|", &format!("{:.2}", stats.corr_mean_abs));
-            stat_row(
-                ui,
-                "decode",
-                stats.decoded_message.as_deref().unwrap_or("none"),
-            );
-            stat_row(ui, "key", &stats.current_key);
-            stat_row(ui, "qr", &stats.current_qr_payload);
-            stat_row(
-                ui,
-                "naive qr",
-                if stats.naive_qr_visible { "visible" } else { "none" },
-            );
-            stat_row(
-                ui,
-                "detector",
-                &stats
-                    .detector_score
-                    .map(|score| format!("{score:.2}"))
-                    .unwrap_or_else(|| "0.00".to_string()),
-            );
-            stat_row(ui, "threshold", &format!("{:.2}", config.min_detector_score));
-            stat_row(
-                ui,
-                "temporal",
-                &format!("{:.2} / {:.2}", config.noise_amplitude, config.l1_amplitude),
-            );
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Temporal Stats").strong());
+            let label = if *is_playing { "Pause" } else { "Play" };
+            if ui.button(label).clicked() {
+                *is_playing = !*is_playing;
+                *last_tick = Instant::now();
+            }
         });
+
+        UiGrid::new("stats-grid")
+            .num_columns(2)
+            .spacing([8.0, 1.0])
+            .show(ui, |ui| {
+                stat_row(ui, "state", if *is_playing { "playing" } else { "paused" });
+                stat_row(
+                    ui,
+                    "frame",
+                    &format!("{}/{}", stats.display_frame, config.n_frames),
+                );
+                stat_row(ui, "window", &stats.window_number.to_string());
+                stat_row(ui, "stream", &stats.stream_position.to_string());
+                stat_row(
+                    ui,
+                    "naive",
+                    &format!("{:.2} .. {:.2}", stats.naive_min, stats.naive_max),
+                );
+                stat_row(ui, "naive |x|", &format!("{:.2}", stats.naive_mean_abs));
+                stat_row(
+                    ui,
+                    "corr",
+                    &format!("{:.2} .. {:.2}", stats.corr_min, stats.corr_max),
+                );
+                stat_row(ui, "corr |x|", &format!("{:.2}", stats.corr_mean_abs));
+                stat_row(
+                    ui,
+                    "decode",
+                    stats.decoded_message.as_deref().unwrap_or("none"),
+                );
+                stat_row(ui, "key", &stats.current_key);
+                stat_row(ui, "qr", &stats.current_qr_payload);
+                stat_row(
+                    ui,
+                    "naive qr",
+                    if stats.naive_qr_visible {
+                        "visible"
+                    } else {
+                        "none"
+                    },
+                );
+                stat_row(
+                    ui,
+                    "detector",
+                    &stats
+                        .detector_score
+                        .map(|score| format!("{score:.2}"))
+                        .unwrap_or_else(|| "0.00".to_string()),
+                );
+                stat_row(
+                    ui,
+                    "threshold",
+                    &format!("{:.2}", config.min_detector_score),
+                );
+                stat_row(
+                    ui,
+                    "temporal",
+                    &format!("{:.2} / {:.2}", config.noise_amplitude, config.l1_amplitude),
+                );
+            });
     });
 }
 
@@ -789,23 +803,20 @@ fn compute_stats(
         config.l1_amplitude,
     )
     .ok();
-    let decoder = temporal_config
-        .and_then(|cfg| TemporalDecoder::new(cfg).ok());
-    let decoded = decoder
-        .as_ref()
-        .and_then(|decoder| {
-            if frames.len() == config.n_frames {
-                decoder
-                    .decode_qr(
-                        frames,
-                        &window.key,
-                        &TemporalDecodePolicy::fixed_threshold(config.min_detector_score).ok()?,
-                    )
-                    .ok()
-            } else {
-                None
-            }
-        });
+    let decoder = temporal_config.and_then(|cfg| TemporalDecoder::new(cfg).ok());
+    let decoded = decoder.as_ref().and_then(|decoder| {
+        if frames.len() == config.n_frames {
+            decoder
+                .decode_qr(
+                    frames,
+                    &window.key,
+                    &TemporalDecodePolicy::fixed_threshold(config.min_detector_score).ok()?,
+                )
+                .ok()
+        } else {
+            None
+        }
+    });
     let detector_score = decoder
         .as_ref()
         .and_then(|decoder| decoder.correlate_prefix(frames, &window.key).ok())
@@ -872,15 +883,18 @@ fn compute_correlation_prefix(
         config.l1_amplitude,
     )
     .map_err(|err| format!("failed to construct temporal config: {err}"))?;
-    let decoder =
-        TemporalDecoder::new(temporal_config).map_err(|err| format!("failed to construct temporal decoder: {err}"))?;
+    let decoder = TemporalDecoder::new(temporal_config)
+        .map_err(|err| format!("failed to construct temporal decoder: {err}"))?;
     decoder
         .correlate_prefix(frames, &window.key)
         .map(|correlation| correlation.field)
         .map_err(|err| format!("failed to correlate temporal prefix: {err}"))
 }
 
-fn build_stream_windows(encoder: &TemporalEncoder, args: &Args) -> Result<Vec<StreamWindow>, String> {
+fn build_stream_windows(
+    encoder: &TemporalEncoder,
+    args: &Args,
+) -> Result<Vec<StreamWindow>, String> {
     let mut windows = Vec::with_capacity(args.stream_windows);
     for index in 0..args.stream_windows {
         let key = format!("{}-w{:04}", args.master_key, index + 1);
