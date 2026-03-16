@@ -213,18 +213,76 @@ What it does:
 What it currently uses:
 
 - QR version-selected tile size
-- a small tile header: `group_id (u16) | shard_id (u8)`
-- hex encoding of tile payload bytes into QR message text
-- a u32 logical payload-length prefix so decode can trim zero padding after shard recovery
+- raw QR byte payloads, not UTF-8 or hex text payloads
+- a small per-tile CRC-protected shard payload rather than tile-local routing metadata
+- keyed tile assignment to determine each tile's `(group_id, shard_id)` role
+- one reserved control group carrying stream-block metadata
+- payload groups carrying only shard bytes plus a u32 logical payload-length prefix inside the recovered payload area
 
 What it is not:
 
 - not the settled production Layer 1/Layer 2 architecture described elsewhere in this document
 - not a replacement for the single-QR bootstrap design yet
 - not synchronization-aware or streaming-aware beyond one fixed accumulation window
-- not efficient in payload density, because hex encoding halves effective QR byte capacity
+- not yet a proof that the control-group dependency is the final production structure
 
 This matters architecturally: the tiled variant is best understood as an experimental parallel composition of many Stage 1 temporal channels, with packet shards carried directly in those QR tiles. It proves that the temporal primitive can scale spatially across a larger frame, but it does not yet prove that the final production layering should be "many QR tiles" instead of "one bootstrap QR plus weaker Layer 2 underlay."
+
+## Carrier Overlay Model
+
+The intended deployment model for `temporal`, especially the tiled path, is additive overlay on top of an existing video carrier.
+
+The codec does not want to become a video codec or container format. It wants a host pipeline to provide frame buffers, then it adds a weak keyed temporal signal before final video encoding or storage.
+
+The current overlay model is:
+
+1. decode or sample a source video into a frame sequence
+2. map each frame into an internal carrier field such as `Grid<f32>`
+3. generate the temporal stego contribution for each active tile across a fixed window of `N` frames
+4. add that contribution onto the corresponding carrier tile region
+5. clamp or quantize into the allowed output range
+6. hand the resulting frames back to the host video pipeline for compression, muxing, or display
+
+For the current tiled implementation in code, this is concretely an additive composition:
+
+- each active tile produces a signal-only temporal QR stream
+- the signal is added onto supplied carrier frames tile-by-tile
+- output values are clipped to a configured limit after addition
+
+This means the tiled codec currently sits:
+
+- above raw frame access
+- below the final video encoder
+- outside container, muxing, timestamp, and transport responsibilities
+
+The decoder model is the reverse:
+
+1. obtain the relevant decoded video frames for a candidate window
+2. crop each active tile region
+3. run keyed temporal correlation per tile
+4. recover control metadata and shard payloads from tile-local QR decodes
+5. reconstruct the logical payload through shard recovery
+
+### What Is Implemented Now
+
+The repository already contains a carrier-overlay path for the tiled codec:
+
+- the encoder can synthesize standalone tiled frames
+- or it can add the tiled signal on top of supplied carrier frames and clip the result
+
+This is implementation proof that the temporal tiled signal can ride on an existing frame stream rather than only on synthetic noise.
+
+### What Is Not Settled Yet
+
+The repository does not yet claim that the current overlay policy is the final production answer for compressed video. In particular, the following are still open design questions:
+
+- whether embedding should target luma only, chroma only, or a weighted combination
+- how amplitude should adapt to local texture, motion, and flat regions
+- whether tile boundaries need guard bands or softened transitions for compression survival
+- how the system should behave under real H.264, HEVC, AV1, or platform-specific transcode pipelines
+- whether a fixed clip limit is the right production control surface
+
+So the current design intent is clear even though the final tuning is not: `temporal` is meant to be overlaid onto an existing video stream in frame space before compression, then recovered from the decoded frames by keyed temporal correlation.
 
 ## Layer 1
 
