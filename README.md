@@ -525,6 +525,84 @@ assert_eq!(decoded, "hello from qrstatic");
 # Ok::<(), qrstatic::Error>(())
 ```
 
+### CLI Binary Payload Flow
+
+The repository now includes a `qrstatic` CLI binary in the `qrstatic-cli` crate. The current end-to-end CLI path is the binary static codec:
+
+1. `encode binary` takes a QR key plus either text bytes or file bytes.
+2. It generates a deterministic static-frame carrier sequence.
+3. It writes a `.qrsb` container containing the binary frames plus the decode metadata.
+4. `decode binary` reads that container, recovers the QR key from accumulation, and reconstructs the payload bytes.
+
+Example with a text payload:
+
+```bash
+cargo run -p qrstatic-cli -- encode binary \
+  --qr-key hello-key \
+  --payload-text "Hello World" \
+  --out /tmp/hello.qrsb
+
+cargo run -p qrstatic-cli -- decode binary --in /tmp/hello.qrsb
+```
+
+Example with a file payload:
+
+```bash
+cargo run -p qrstatic-cli -- encode binary \
+  --qr-key file-key \
+  --payload-file ./secret.bin \
+  --out /tmp/secret.qrsb
+
+cargo run -p qrstatic-cli -- decode binary \
+  --in /tmp/secret.qrsb \
+  --payload-out /tmp/recovered-secret.bin
+```
+
+If the payload is valid UTF-8 and `--payload-out` is omitted, decode prints it as text. Otherwise, pass `--payload-out` to write the recovered bytes.
+
+#### Binary CLI Flags
+
+`qrstatic encode binary`
+- `--qr-key <key>`: required QR/key string embedded in the recoverable QR layer
+- `--payload-text <text>`: use inline text as the payload bytes
+- `--payload-file <path>`: use file contents as the payload bytes
+- `--out <file>`: required output container path
+- `--width <n>`: optional frame width override
+- `--height <n>`: optional frame height override
+- `--frames <n>`: optional frame-count override
+- `--seed <seed>`: optional deterministic seed override
+- `--base-bias <f32>`: optional binary carrier bias override
+- `--payload-bias-delta <f32>`: optional payload bias delta override
+- `--optimize`: search for the smallest viable binary stream settings and write a bit-packed container
+
+`qrstatic decode binary`
+- `--in <file>`: required input container path
+- `--payload-out <path>`: optional recovered payload output path
+
+#### Default vs Optimized Behavior
+
+By default, `encode binary` errs toward conservative settings:
+- `41x41` frames
+- `60` frames per decode window
+- unpacked frame storage in the `.qrsb` container
+
+With `--optimize`, the CLI currently:
+- searches for a smaller viable frame size and frame count
+- bit-packs the binary frame cells in the container
+
+For a small payload like `Hello World`, that reduces the container size substantially while leaving the underlying carrier semantics unchanged.
+
+#### Current Capacity Caveat
+
+The current single-window binary codec is not yet a general large-file transport.
+
+Today, one binary encode/decode window has at most `width * height` payload bit positions. In practice that means:
+- small payloads such as `Hello World` work
+- a large file such as a JPEG will usually not fit in one `41x41` window
+- the CLI fails explicitly when the payload exceeds the current one-window capacity
+
+Supporting larger files will require either chunking across multiple windows or a denser payload mapping.
+
 ### Installation
 
 ```toml
@@ -640,7 +718,9 @@ Validated locally on March 16, 2026:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test` — **186 passing functional tests + 6 hygiene tests**
 
-The repository now also includes a sibling CLI crate with the initial `qrstatic encode` / `qrstatic decode` command scaffolding.
+The repository also includes a sibling CLI crate with a working binary payload encode/decode path:
+- `qrstatic encode binary`
+- `qrstatic decode binary`
 
 ## Origin
 
