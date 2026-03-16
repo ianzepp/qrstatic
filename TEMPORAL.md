@@ -11,6 +11,7 @@ Current repository status:
 - `temporal` Stage 1 Layer 1 exists in code
 - it is still a fixed-window bootstrap implementation, not the full production stack
 - a first Stage 2 packet/FEC slice exists in code, but it is still a narrow prototype rather than the final production design
+- an experimental tiled temporal variant now exists in code, using many independent temporal QR tiles across one video frame
 - the debug viewer and eval tooling now target `temporal`, not the old reference codecs
 
 All existing codecs in this repository should be treated as experimental or reference designs:
@@ -193,6 +194,37 @@ What this prototype is not yet:
 - a proof that the current Layer 2 symbol mapping is the final production mapping
 
 This Stage 2 slice should therefore be treated as implementation proof, not final architecture.
+
+## Current Experimental Tiled Variant
+
+The repository now also contains an experimental tiled transport variant in:
+
+- `crates/qrstatic/src/codec/temporal_tiled.rs`
+
+What it does:
+
+- divides a larger video frame into many fixed QR-sized tiles
+- runs one independent fixed-window temporal QR channel per active tile
+- derives one tile-local temporal key per tile from the master key
+- shards an opaque payload into bounded tile payloads
+- scatters data and parity shards across tiles using keyed assignment
+- reassembles the payload from decoded tile shards with Reed-Solomon-style recovery
+
+What it currently uses:
+
+- QR version-selected tile size
+- a small tile header: `group_id (u16) | shard_id (u8)`
+- hex encoding of tile payload bytes into QR message text
+- a u32 logical payload-length prefix so decode can trim zero padding after shard recovery
+
+What it is not:
+
+- not the settled production Layer 1/Layer 2 architecture described elsewhere in this document
+- not a replacement for the single-QR bootstrap design yet
+- not synchronization-aware or streaming-aware beyond one fixed accumulation window
+- not efficient in payload density, because hex encoding halves effective QR byte capacity
+
+This matters architecturally: the tiled variant is best understood as an experimental parallel composition of many Stage 1 temporal channels, with packet shards carried directly in those QR tiles. It proves that the temporal primitive can scale spatially across a larger frame, but it does not yet prove that the final production layering should be "many QR tiles" instead of "one bootstrap QR plus weaker Layer 2 underlay."
 
 ## Layer 1
 
@@ -463,6 +495,11 @@ Acceptable approaches:
 Stage 2 should begin with Reed-Solomon over bounded packet groups and treat missing or low-confidence packets as erasures first. This matches the simplest reliable reuse of standard coding theory and avoids inventing new parity semantics inside `temporal`.
 
 Do not invent a custom parity theory unless a standard one demonstrably fails the constraints.
+
+Current implementation note:
+
+- the experimental tiled path already uses bounded shard groups plus Reed-Solomon-style recovery, but it does so by placing shard-bearing QR payloads directly into many temporal tiles
+- that is an implementation prototype, not a final decision that production Layer 2 should be QR-text-per-shard
 
 ## Payload Containers and Reuse
 
@@ -735,8 +772,28 @@ Current status:
 
 - implemented as a first prototype
 - exposed through a packet layer plus fixed-window Layer 2 encode/decode path
+- also explored through an experimental tiled transport that spreads shard-bearing temporal QR tiles across a larger frame
 - still missing bootstrap integration through Layer 1 metadata
 - still subject to redesign if later evals show the current Layer 2 mapping is too fragile or too visible
+- still missing a clear architectural decision between:
+  - single-bootstrap-QR plus weaker Layer 2 underlay
+  - tiled parallel temporal QR channels as a higher-throughput mode
+
+### Stage 2A: Tiled Parallel Prototype
+
+Implemented now:
+
+- larger-frame tiling into many QR-sized temporal subchannels
+- keyed scatter of data/parity shard placement
+- full-window encode/decode of all active tiles
+- group recovery with payload-length trimming
+
+Open issues before this can be considered more than experimental:
+
+- payload efficiency is poor because shard bytes are hex-encoded into QR text
+- the tile header is deliberately tiny and does not yet carry richer integrity or session metadata
+- the mode currently assumes exact video geometry, exact QR version, and exact fixed window configuration out of band
+- no evidence yet that tiled multi-QR presentation is the right concealment tradeoff for production
 
 ### Stage 3: Framed Payloads
 
