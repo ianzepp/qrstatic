@@ -1,7 +1,9 @@
 use crate::Grid;
 
+pub(crate) mod common;
 pub mod analog;
 pub mod binary;
+pub mod layered;
 pub mod signed;
 pub mod xor;
 

@@ -11,7 +11,8 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 - Phase 4 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` with 131 passing tests as of 2026-03-15).
 - Phase 5 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
 - Phase 6 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
-- Phase 7 is the next implementation target.
+- Phase 7 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
+- Phase 8 is the next implementation target.
 
 ## Architecture
 
@@ -183,6 +184,14 @@ Validation notes:
 ### Phase 7 — Two-Layer Recursive Codec
 
 N1 frames per L1 output, N2 L1 outputs per L2 output. Hierarchical steganography.
+
+Status: complete.
+
+Validation notes:
+- L1 uses deterministic analog carrier frames whose accumulated sign reveals QR1 every `n1` frames.
+- L2 is reconstructed from QR1-aligned magnitude deviations across `n2` L1 outputs with deterministic noise cancellation.
+- QR2 is recovered from the sign of the L2 deviation field, and payload from QR2-aligned magnitude votes.
+- Batch roundtrips, the 30×30 default window, and streaming L1/L2 cadence are covered.
 
 **Files:**
 - `src/codec/layered.rs` — `LayeredEncoder`: generates N1×N2 carrier frames. L1 QR in sign, L2 QR + payload in magnitude deviations across L1 outputs. `LayeredDecoder`: group into N1 chunks, accumulate each for L1, then accumulate L1 magnitude deviations for L2. Streaming wrappers.

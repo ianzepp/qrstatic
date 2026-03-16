@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 
 use crate::bits::{bits_to_bytes, bytes_to_bits, spread_bits};
+use crate::codec::common::{
+    embed_qr_in_frame, extract_qr_from_sign_grid, qr_signs_in_frame, validate_matching_frames,
+};
 use crate::codec::{EncodeConfig, Frame};
 use crate::error::{Error, Result};
 use crate::grid::accumulate_i16;
@@ -70,6 +73,7 @@ impl SignedEncoder {
         let payload_delta = if payload.is_empty() { 0 } else { 2 };
         let mut frames =
             vec![Grid::<i8>::new(self.frame_shape.0, self.frame_shape.1); self.config.n_frames];
+        let sample_seed = sample_seed(&self.config.seed, qr_seed);
 
         for row in 0..self.frame_shape.1 {
             for col in 0..self.frame_shape.0 {
@@ -89,7 +93,7 @@ impl SignedEncoder {
                     row,
                     col,
                     desired_sum,
-                    qr_seed,
+                    &sample_seed,
                     (row * self.frame_shape.0 + col) as u64,
                 );
             }
@@ -114,7 +118,7 @@ impl SignedDecoder {
     }
 
     pub fn decode_qr(frames: &[Grid<i8>]) -> Result<Grid<u8>> {
-        let accumulated = accumulate_i16(frames);
+        let accumulated = accumulate_signed_checked(frames)?;
         extract_qr(&accumulated).ok_or_else(|| {
             Error::Codec("could not extract a valid QR crop from signed frame".into())
         })
@@ -172,7 +176,7 @@ impl SignedDecoder {
     }
 
     pub fn decode_message(&self, frames: &[Grid<i8>]) -> Result<SignedDecodeResult> {
-        let accumulated = accumulate_i16(frames);
+        let accumulated = accumulate_signed_checked(frames)?;
         let sign_grid = accumulated.map(|&value| u8::from(value <= 0));
         let Some(qr_grid) = extract_qr(&accumulated) else {
             return Ok(SignedDecodeResult {
@@ -333,10 +337,6 @@ fn payload_target_map(frame_shape: (usize, usize), payload: &[u8]) -> Grid<i8> {
     Grid::from_vec(data, frame_shape.0, frame_shape.1)
 }
 
-fn qr_signs_in_frame(qr_in_frame: &Grid<u8>) -> Grid<i8> {
-    qr_in_frame.map(|&module| if module == 0 { 1i8 } else { -1i8 })
-}
-
 fn normalize_magnitude(magnitude: i16, n_frames: usize) -> i16 {
     let max = n_frames as i16;
     let min = if n_frames.is_multiple_of(2) { 2 } else { 1 };
@@ -374,62 +374,18 @@ fn assign_signed_samples(
     }
 }
 
-fn embed_qr_in_frame(qr_grid: &Grid<u8>, frame_shape: (usize, usize)) -> Result<Grid<u8>> {
-    if qr_grid.width() > frame_shape.0 || qr_grid.height() > frame_shape.1 {
-        return Err(Error::Codec(format!(
-            "frame shape {:?} is smaller than QR size {}x{}",
-            frame_shape,
-            qr_grid.width(),
-            qr_grid.height()
-        )));
-    }
-
-    let mut frame = Grid::filled(frame_shape.0, frame_shape.1, 0u8);
-    let row_offset = (frame_shape.1 - qr_grid.height()) / 2;
-    let col_offset = (frame_shape.0 - qr_grid.width()) / 2;
-
-    for row in 0..qr_grid.height() {
-        for col in 0..qr_grid.width() {
-            frame[(row + row_offset, col + col_offset)] = qr_grid[(row, col)];
-        }
-    }
-
-    Ok(frame)
-}
-
-fn centered_qr_crop(grid: &Grid<u8>, size: usize) -> Result<Grid<u8>> {
-    if size > grid.width() || size > grid.height() {
-        return Err(Error::Codec(format!(
-            "cannot crop {}x{} QR from {}x{} grid",
-            size,
-            size,
-            grid.width(),
-            grid.height()
-        )));
-    }
-    let row_offset = (grid.height() - size) / 2;
-    let col_offset = (grid.width() - size) / 2;
-    let mut data = Vec::with_capacity(size * size);
-    for row in 0..size {
-        for col in 0..size {
-            data.push(grid[(row + row_offset, col + col_offset)]);
-        }
-    }
-    Ok(Grid::from_vec(data, size, size))
-}
-
 fn extract_qr(accumulated: &Grid<i16>) -> Option<Grid<u8>> {
     let sign_grid = accumulated.map(|&value| u8::from(value <= 0));
-    for size in [21usize, 25, 29, 33, 37, 41] {
-        if size > sign_grid.width() || size > sign_grid.height() {
-            continue;
-        }
-        let candidate = centered_qr_crop(&sign_grid, size).ok()?;
-        if qr::decode::decode(&candidate).is_ok() {
-            return Some(candidate);
-        }
-    }
-    None
+    extract_qr_from_sign_grid(&sign_grid)
+}
+
+fn sample_seed(encoder_seed: &str, qr_seed: &str) -> String {
+    format!("{encoder_seed}:{qr_seed}")
+}
+
+fn accumulate_signed_checked(frames: &[Grid<i8>]) -> Result<Grid<i16>> {
+    validate_matching_frames(frames, "cannot decode zero signed frames")?;
+    Ok(accumulate_i16(frames))
 }
 
 impl From<Grid<i8>> for Frame {
@@ -456,6 +412,24 @@ mod tests {
     }
 
     #[test]
+    fn decode_qr_rejects_empty_input() {
+        assert!(SignedDecoder::decode_qr(&[]).is_err());
+    }
+
+    #[test]
+    fn seed_affects_signed_frames() {
+        let a = SignedEncoder::new(8, (41, 41), "seed-a", 3)
+            .unwrap()
+            .encode_message("seeded", b"payload")
+            .unwrap();
+        let b = SignedEncoder::new(8, (41, 41), "seed-b", 3)
+            .unwrap()
+            .encode_message("seeded", b"payload")
+            .unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
     fn signed_frames_are_binary_pm_one() {
         let encoder = SignedEncoder::new(4, (21, 21), "seed", 3).unwrap();
         let frames = encoder.encode_message("hi", b"x").unwrap();
@@ -468,7 +442,7 @@ mod tests {
     fn embed_qr_is_centered() {
         let qr_grid = qr::encode::encode("A").unwrap();
         let embedded = embed_qr_in_frame(&qr_grid, (25, 25)).unwrap();
-        let cropped = centered_qr_crop(&embedded, qr_grid.width()).unwrap();
+        let cropped = crate::codec::common::centered_qr_crop(&embedded, qr_grid.width()).unwrap();
         assert_eq!(cropped, qr_grid);
     }
 }
