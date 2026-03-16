@@ -5,6 +5,7 @@ pub mod analog;
 pub mod binary;
 pub mod layered;
 pub mod signed;
+pub mod sliding;
 pub mod xor;
 
 /// A carrier frame for one of the supported codec families.

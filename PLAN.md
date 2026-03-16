@@ -12,7 +12,8 @@ Ported from [qr-static-stream](https://github.com/ianzepp/qr-static-stream) (Pyt
 - Phase 5 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
 - Phase 6 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
 - Phase 7 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
-- Phase 8 is the next implementation target.
+- Phase 8 is complete and validated with the same full pass (`cargo build`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` on 2026-03-15).
+- Phase 9 is the next implementation target.
 
 ## Architecture
 
@@ -206,6 +207,13 @@ Validation notes:
 ### Phase 8 — Sliding Window Codec
 
 Overlapping windows, no detectable boundaries. Most sophisticated approach.
+
+Status: complete.
+
+Validation notes:
+- L1 uses overlapping `n1`-frame windows with configurable stride and deterministic per-frame noise keyed by absolute frame index.
+- L2 is overlaid additively across the first `n1 * n2` frames and decoded from discrete `n1`-sized samples with deterministic noise cancellation.
+- Offset-based L1 decoding, stride variation, and streaming L1/L2 cadence are covered.
 
 **Files:**
 - `src/codec/sliding.rs` — `SlidingEncoder`: L1 with overlapping windows (stride < N1), L2 overlay spread across N1×N2 frames. `SlidingDecoder`: can lock on at any offset, decode L1 from any N1 consecutive frames, decode L2 from N2 L1 outputs. Streaming wrappers.
