@@ -3,10 +3,12 @@ members = [
     "crates/qrstatic",
     "crates/qrstatic-cli",
     "crates/qrstatic-debug-macos",
+    "crates/qrstatic-debug-tui",
 ]
 default-members = [
     "crates/qrstatic",
     "crates/qrstatic-cli",
     "crates/qrstatic-debug-macos",
+    "crates/qrstatic-debug-tui",
 ]
 resolver = "3"
