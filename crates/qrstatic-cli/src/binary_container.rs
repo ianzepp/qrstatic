@@ -52,7 +52,11 @@ impl BinaryContainer {
         let mut out = Vec::new();
         out.extend_from_slice(MAGIC);
         out.push(VERSION);
-        let flags = if self.packed_bits { FLAG_PACKED_BITS } else { 0 };
+        let flags = if self.packed_bits {
+            FLAG_PACKED_BITS
+        } else {
+            0
+        };
         out.push(flags);
         out.extend_from_slice(&width.to_le_bytes());
         out.extend_from_slice(&height.to_le_bytes());

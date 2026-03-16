@@ -14,6 +14,9 @@ use crate::{Grid, Result};
 const BASE64URL_CHARS: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const PAYLOAD_LEN_SIZE: usize = 4; // u32 LE logical payload length
+const TILED_STREAM_BLOCK_MAGIC: &[u8; 4] = b"QTT1";
+const TILED_STREAM_BLOCK_VERSION: u8 = 1;
+const TILED_STREAM_BLOCK_HEADER_LEN: usize = 29;
 
 fn base64url_encoded_len(raw_len: usize) -> usize {
     let full_chunks = raw_len / 3;
@@ -156,6 +159,146 @@ fn decode_tile_payload(encoded: &str) -> Result<(u16, u8, Vec<u8>)> {
         )));
     }
     Ok((group_id, shard_id, shard_data))
+}
+
+// ── Stream block framing ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TiledStreamBlockHeader {
+    pub version: u8,
+    pub session_id: u64,
+    pub block_index: u32,
+    pub block_count: u32,
+    pub payload_len: u32,
+    pub payload_crc32: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TiledStreamBlock {
+    pub header: TiledStreamBlockHeader,
+    pub payload: Vec<u8>,
+}
+
+impl TiledStreamBlock {
+    pub fn new(
+        session_id: u64,
+        block_index: u32,
+        block_count: u32,
+        payload: Vec<u8>,
+    ) -> Result<Self> {
+        let payload_len = u32::try_from(payload.len())
+            .map_err(|_| crate::Error::Codec("tiled stream block payload too large".into()))?;
+        let header = TiledStreamBlockHeader {
+            version: TILED_STREAM_BLOCK_VERSION,
+            session_id,
+            block_index,
+            block_count,
+            payload_len,
+            payload_crc32: crc32(&payload),
+        };
+        let block = Self { header, payload };
+        block.validate()?;
+        Ok(block)
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+
+        let mut bytes = Vec::with_capacity(TILED_STREAM_BLOCK_HEADER_LEN + self.payload.len());
+        bytes.extend_from_slice(TILED_STREAM_BLOCK_MAGIC);
+        bytes.push(self.header.version);
+        bytes.extend_from_slice(&self.header.session_id.to_le_bytes());
+        bytes.extend_from_slice(&self.header.block_index.to_le_bytes());
+        bytes.extend_from_slice(&self.header.block_count.to_le_bytes());
+        bytes.extend_from_slice(&self.header.payload_len.to_le_bytes());
+        bytes.extend_from_slice(&self.header.payload_crc32.to_le_bytes());
+        bytes.extend_from_slice(&self.payload);
+        Ok(bytes)
+    }
+
+    pub fn decode(encoded: &[u8]) -> Result<Self> {
+        if encoded.len() < TILED_STREAM_BLOCK_HEADER_LEN {
+            return Err(crate::Error::Codec(format!(
+                "tiled stream block requires at least {} bytes, got {}",
+                TILED_STREAM_BLOCK_HEADER_LEN,
+                encoded.len()
+            )));
+        }
+        if &encoded[..4] != TILED_STREAM_BLOCK_MAGIC {
+            return Err(crate::Error::Codec(
+                "tiled stream block magic mismatch".into(),
+            ));
+        }
+
+        let version = encoded[4];
+        let mut session_id_bytes = [0u8; 8];
+        session_id_bytes.copy_from_slice(&encoded[5..13]);
+        let session_id = u64::from_le_bytes(session_id_bytes);
+
+        let mut block_index_bytes = [0u8; 4];
+        block_index_bytes.copy_from_slice(&encoded[13..17]);
+        let block_index = u32::from_le_bytes(block_index_bytes);
+
+        let mut block_count_bytes = [0u8; 4];
+        block_count_bytes.copy_from_slice(&encoded[17..21]);
+        let block_count = u32::from_le_bytes(block_count_bytes);
+
+        let mut payload_len_bytes = [0u8; 4];
+        payload_len_bytes.copy_from_slice(&encoded[21..25]);
+        let payload_len = u32::from_le_bytes(payload_len_bytes);
+
+        let mut payload_crc32_bytes = [0u8; 4];
+        payload_crc32_bytes.copy_from_slice(&encoded[25..29]);
+        let payload_crc32 = u32::from_le_bytes(payload_crc32_bytes);
+
+        let payload = encoded[29..].to_vec();
+        let block = Self {
+            header: TiledStreamBlockHeader {
+                version,
+                session_id,
+                block_index,
+                block_count,
+                payload_len,
+                payload_crc32,
+            },
+            payload,
+        };
+        block.validate()?;
+        Ok(block)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.header.version != TILED_STREAM_BLOCK_VERSION {
+            return Err(crate::Error::Codec(format!(
+                "unsupported tiled stream block version {}, expected {}",
+                self.header.version, TILED_STREAM_BLOCK_VERSION
+            )));
+        }
+        if self.header.block_count == 0 {
+            return Err(crate::Error::Codec(
+                "tiled stream block requires block_count > 0".into(),
+            ));
+        }
+        if self.header.block_index >= self.header.block_count {
+            return Err(crate::Error::Codec(format!(
+                "block_index {} must be less than block_count {}",
+                self.header.block_index, self.header.block_count
+            )));
+        }
+        if self.payload.len() != self.header.payload_len as usize {
+            return Err(crate::Error::Codec(format!(
+                "tiled stream block payload length mismatch: header says {}, actual {}",
+                self.header.payload_len,
+                self.payload.len()
+            )));
+        }
+        if crc32(&self.payload) != self.header.payload_crc32 {
+            return Err(crate::Error::Codec(
+                "tiled stream block payload CRC mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 // ── Config ─────────────────────────────────────────────────────────────
@@ -603,6 +746,15 @@ impl TiledEncoder {
 
         Ok(video_frames)
     }
+
+    pub fn encode_stream_block(
+        &self,
+        master_key: &str,
+        block: &TiledStreamBlock,
+    ) -> Result<Vec<Grid<f32>>> {
+        let encoded = block.encode()?;
+        self.encode_payload(master_key, &encoded)
+    }
 }
 
 // ── Decoder ────────────────────────────────────────────────────────────
@@ -633,6 +785,7 @@ pub struct TiledDecodeResult {
     pub tiles_total: usize,
     pub group_results: Vec<GroupRecoveryOutcome>,
     pub payload: Option<Vec<u8>>,
+    pub stream_block: Option<TiledStreamBlock>,
 }
 
 #[derive(Debug, Clone)]
@@ -819,12 +972,17 @@ impl TiledDecoder {
             None
         };
 
+        let stream_block = payload
+            .as_ref()
+            .and_then(|bytes| TiledStreamBlock::decode(bytes).ok());
+
         Ok(TiledDecodeResult {
             tile_results,
             tiles_decoded,
             tiles_total: layout.total_tiles,
             group_results,
             payload,
+            stream_block,
         })
     }
 }
@@ -868,6 +1026,24 @@ mod tests {
         assert_eq!(group_id, 7);
         assert_eq!(shard_id, 2);
         assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn stream_block_roundtrip() {
+        let payload = b"hello tiled stream".to_vec();
+        let block = TiledStreamBlock::new(0x1122_3344_5566_7788, 2, 9, payload.clone()).unwrap();
+        let encoded = block.encode().unwrap();
+        let decoded = TiledStreamBlock::decode(&encoded).unwrap();
+        assert_eq!(decoded, block);
+        assert_eq!(decoded.payload, payload);
+    }
+
+    #[test]
+    fn stream_block_rejects_corruption() {
+        let block = TiledStreamBlock::new(7, 0, 1, b"payload".to_vec()).unwrap();
+        let mut encoded = block.encode().unwrap();
+        *encoded.last_mut().unwrap() ^= 0x01;
+        assert!(TiledStreamBlock::decode(&encoded).is_err());
     }
 
     #[test]
@@ -1060,5 +1236,23 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.payload, Some(payload));
+    }
+
+    #[test]
+    fn tiled_stream_block_roundtrip() {
+        let config = TiledConfig::new((100, 100), 2, 64, 0.42, 0.22, 2, 1).unwrap();
+        let master_key = "test-tiled-stream";
+        let encoder = TiledEncoder::new(config.clone(), master_key).unwrap();
+        let block = TiledStreamBlock::new(42, 1, 3, b"stream payload".to_vec()).unwrap();
+
+        let frames = encoder.encode_stream_block(master_key, &block).unwrap();
+
+        let policy = TemporalDecodePolicy::fixed_threshold(6.0).unwrap();
+        let decoder = TiledDecoder::new(config, master_key).unwrap();
+        let result = decoder
+            .decode_payload(&frames, master_key, &policy)
+            .unwrap();
+
+        assert_eq!(result.stream_block, Some(block));
     }
 }

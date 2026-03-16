@@ -4,12 +4,12 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use qrstatic::Grid;
 use qrstatic::codec::temporal::{
     TemporalConfig, TemporalDecodePolicy, TemporalDecoder, TemporalEncoder, detector_score,
     naive_field, try_extract_qr,
 };
 use qrstatic::qr;
-use qrstatic::Grid;
 
 fn main() -> ExitCode {
     let args = match EvalArgs::parse(env::args().skip(1)) {
@@ -76,13 +76,23 @@ impl EvalArgs {
         while let Some(flag) = args.next() {
             match flag.as_str() {
                 "--profile" => parsed.profile = next_value(&mut args, "--profile")?,
-                "--trials" => parsed.trials = parse_usize(&next_value(&mut args, "--trials")?, "--trials")?,
-                "--width" => parsed.width = parse_usize(&next_value(&mut args, "--width")?, "--width")?,
-                "--height" => parsed.height = parse_usize(&next_value(&mut args, "--height")?, "--height")?,
-                "--frames" => parsed.frames = parse_usize(&next_value(&mut args, "--frames")?, "--frames")?,
+                "--trials" => {
+                    parsed.trials = parse_usize(&next_value(&mut args, "--trials")?, "--trials")?
+                }
+                "--width" => {
+                    parsed.width = parse_usize(&next_value(&mut args, "--width")?, "--width")?
+                }
+                "--height" => {
+                    parsed.height = parse_usize(&next_value(&mut args, "--height")?, "--height")?
+                }
+                "--frames" => {
+                    parsed.frames = parse_usize(&next_value(&mut args, "--frames")?, "--frames")?
+                }
                 "--noise-amplitude" => {
-                    parsed.noise_amplitude =
-                        parse_f32(&next_value(&mut args, "--noise-amplitude")?, "--noise-amplitude")?
+                    parsed.noise_amplitude = parse_f32(
+                        &next_value(&mut args, "--noise-amplitude")?,
+                        "--noise-amplitude",
+                    )?
                 }
                 "--l1-amplitude" => {
                     parsed.l1_amplitude =
@@ -93,8 +103,10 @@ impl EvalArgs {
                         parse_f32(&next_value(&mut args, "--threshold")?, "--threshold")?
                 }
                 "--prefix-step" => {
-                    parsed.prefix_step =
-                        Some(parse_usize(&next_value(&mut args, "--prefix-step")?, "--prefix-step")?)
+                    parsed.prefix_step = Some(parse_usize(
+                        &next_value(&mut args, "--prefix-step")?,
+                        "--prefix-step",
+                    )?)
                 }
                 "--key-prefix" => parsed.key_prefix = next_value(&mut args, "--key-prefix")?,
                 "--qr-prefix" => parsed.qr_prefix = next_value(&mut args, "--qr-prefix")?,
@@ -195,7 +207,10 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
         }
 
         let wrong_window = make_wrong_window(&frames, &other_frames);
-        if decoder.decode_qr(&wrong_window, &master_key, &policy).is_ok() {
+        if decoder
+            .decode_qr(&wrong_window, &master_key, &policy)
+            .is_ok()
+        {
             summary.wrong_window_decode_successes += 1;
         }
 
@@ -223,12 +238,11 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
                 .correlation_score(&wrong_window, &master_key)
                 .map_err(|err| format!("trial {trial}: failed to score wrong window: {err}"))?,
         );
-        summary.naive_scores.push(
-            detector_score(
-                &naive_field(&frames)
-                    .map_err(|err| format!("trial {trial}: failed to score naive path: {err}"))?,
-            ),
-        );
+        summary
+            .naive_scores
+            .push(detector_score(&naive_field(&frames).map_err(|err| {
+                format!("trial {trial}: failed to score naive path: {err}")
+            })?));
 
         for prefix_summary in &mut summary.prefix_summaries {
             let prefix_len = prefix_summary.prefix_frames;
@@ -261,7 +275,9 @@ fn run_eval(args: &EvalArgs) -> Result<EvalSummary, String> {
 
             let wrong_window_correlation = decoder
                 .correlate_prefix(wrong_window_prefix, &master_key)
-                .map_err(|err| format!("trial {trial}: failed to score wrong-window prefix: {err}"))?;
+                .map_err(|err| {
+                    format!("trial {trial}: failed to score wrong-window prefix: {err}")
+                })?;
             prefix_summary
                 .wrong_window_scores
                 .push(wrong_window_correlation.detector_score);
@@ -377,13 +393,21 @@ fn print_summary(args: &EvalArgs, summary: &EvalSummary) {
     print_score_row("naive_sum   ", &summary.naive_scores);
     println!();
     println!("score margins:");
-    print_margin_row("correct - wrong_key   ", &summary.correct_scores, &summary.wrong_key_scores);
+    print_margin_row(
+        "correct - wrong_key   ",
+        &summary.correct_scores,
+        &summary.wrong_key_scores,
+    );
     print_margin_row(
         "correct - wrong_window",
         &summary.correct_scores,
         &summary.wrong_window_scores,
     );
-    print_margin_row("correct - naive_sum   ", &summary.correct_scores, &summary.naive_scores);
+    print_margin_row(
+        "correct - naive_sum   ",
+        &summary.correct_scores,
+        &summary.naive_scores,
+    );
 
     if !summary.prefix_summaries.is_empty() {
         println!();
@@ -414,10 +438,16 @@ fn print_summary(args: &EvalArgs, summary: &EvalSummary) {
     }
 }
 
-fn prefix_threshold_frame(prefix_summaries: &[PrefixSummary], trials: usize, target_pct: f32) -> Option<usize> {
+fn prefix_threshold_frame(
+    prefix_summaries: &[PrefixSummary],
+    trials: usize,
+    target_pct: f32,
+) -> Option<usize> {
     prefix_summaries
         .iter()
-        .find(|prefix_summary| percent(prefix_summary.correct_decode_successes, trials) >= target_pct)
+        .find(|prefix_summary| {
+            percent(prefix_summary.correct_decode_successes, trials) >= target_pct
+        })
         .map(|prefix_summary| prefix_summary.prefix_frames)
 }
 

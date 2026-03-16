@@ -15,5 +15,9 @@ path = "src/main.rs"
 name = "qrstatic-temporal-eval"
 path = "src/temporal_eval.rs"
 
+[[bin]]
+name = "qrstatic-temporal-tiled-eval"
+path = "src/temporal_tiled_eval.rs"
+
 [dependencies]
 qrstatic = { path = "../qrstatic" }

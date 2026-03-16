@@ -270,10 +270,16 @@ impl BinaryEncodeArgs {
                     width = Some(parse_usize(&next_value(&mut args, "--width")?, "--width")?)
                 }
                 "--height" => {
-                    height = Some(parse_usize(&next_value(&mut args, "--height")?, "--height")?)
+                    height = Some(parse_usize(
+                        &next_value(&mut args, "--height")?,
+                        "--height",
+                    )?)
                 }
                 "--frames" => {
-                    n_frames = Some(parse_usize(&next_value(&mut args, "--frames")?, "--frames")?)
+                    n_frames = Some(parse_usize(
+                        &next_value(&mut args, "--frames")?,
+                        "--frames",
+                    )?)
                 }
                 "--seed" => seed = next_value(&mut args, "--seed")?,
                 "--base-bias" => {
@@ -292,7 +298,8 @@ impl BinaryEncodeArgs {
 
         let qr_key = qr_key.ok_or_else(|| "missing required flag --qr-key".to_string())?;
         let out = out.ok_or_else(|| "missing required flag --out".to_string())?;
-        let payload_sources = usize::from(payload_text.is_some()) + usize::from(payload_file.is_some());
+        let payload_sources =
+            usize::from(payload_text.is_some()) + usize::from(payload_file.is_some());
         if payload_sources != 1 {
             return Err(
                 "provide exactly one of --payload-text or --payload-file for binary encode".into(),
@@ -544,8 +551,8 @@ fn ceil_sqrt(value: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_binary_encode_config, BinaryDecodeArgs, BinaryEncodeArgs, DEFAULT_BASE_BIAS,
-        DEFAULT_PAYLOAD_BIAS_DELTA, DEFAULT_SEED,
+        BinaryDecodeArgs, BinaryEncodeArgs, DEFAULT_BASE_BIAS, DEFAULT_PAYLOAD_BIAS_DELTA,
+        DEFAULT_SEED, resolve_binary_encode_config,
     };
     use std::path::PathBuf;
 

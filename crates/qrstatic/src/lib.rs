@@ -34,6 +34,11 @@ pub use codec::sliding::SlidingDecodeResult;
 pub use codec::temporal::{TemporalDecodeResult, TemporalLayer2Config, TemporalLayer2DecodeResult};
 /// Common temporal packet-layer types.
 pub use codec::temporal_packet::{TemporalPacket, TemporalPacketProfile};
+/// Common tiled temporal codec types.
+pub use codec::temporal_tiled::{
+    TiledConfig, TiledDecodeResult, TiledDecoder, TiledEncoder, TiledStreamBlock,
+    TiledStreamBlockHeader,
+};
 /// Shared codec carrier and result types.
 pub use codec::{DecodeResult, EncodeConfig, Frame};
 /// Error and result aliases used across the crate.
