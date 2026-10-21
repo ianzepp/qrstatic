@@ -1,0 +1,4 @@
+interface:
+  display_name: "Noise Channel Analysis"
+  short_description: "Analyze hidden signal in noise."
+  default_prompt: "Use $noise-channel-analysis to investigate this random-looking stream or codebase for hidden channels, recovery paths, and detection weaknesses."
